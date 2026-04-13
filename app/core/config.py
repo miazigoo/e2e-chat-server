@@ -1,0 +1,63 @@
+from typing import List, Optional
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    app_name: str = Field(default="secure-chat-backend", alias="APP_NAME")
+    app_env: str = Field(default="development", alias="APP_ENV")
+    debug: bool = Field(default=True, alias="DEBUG")
+    api_v1_prefix: str = Field(default="/api/v1", alias="API_V1_PREFIX")
+
+    database_url: str = Field(alias="DATABASE_URL")
+    redis_url: str = Field(alias="REDIS_URL")
+    rabbitmq_url: str = Field(alias="RABBITMQ_URL")
+
+    jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    access_token_expire_minutes: int = Field(
+        default=15, alias="ACCESS_TOKEN_EXPIRE_MINUTES"
+    )
+    refresh_token_expire_days: int = Field(
+        default=30, alias="REFRESH_TOKEN_EXPIRE_DAYS"
+    )
+
+    email_code_expire_minutes: int = Field(
+        default=10, alias="EMAIL_CODE_EXPIRE_MINUTES"
+    )
+    login_max_failed_attempts: int = Field(default=5, alias="LOGIN_MAX_FAILED_ATTEMPTS")
+    login_failure_window_minutes: int = Field(
+        default=30, alias="LOGIN_FAILURE_WINDOW_MINUTES"
+    )
+
+    minio_endpoint: str = Field(alias="MINIO_ENDPOINT")
+    minio_access_key: str = Field(alias="MINIO_ACCESS_KEY")
+    minio_secret_key: str = Field(alias="MINIO_SECRET_KEY")
+    minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+    minio_bucket_attachments: str = Field(alias="MINIO_BUCKET_ATTACHMENTS")
+    minio_bucket_temp: str = Field(alias="MINIO_BUCKET_TEMP")
+
+    fcm_project_id: Optional[str] = Field(default=None, alias="FCM_PROJECT_ID")
+    fcm_credentials_path: Optional[str] = Field(
+        default=None, alias="FCM_CREDENTIALS_PATH"
+    )
+
+    backend_cors_origins_raw: str = Field(default="*", alias="BACKEND_CORS_ORIGINS")
+
+    @property
+    def backend_cors_origins(self) -> List[str]:
+        raw = self.backend_cors_origins_raw.strip()
+        if raw == "*":
+            return ["*"]
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+settings = Settings()  # type: ignore[call-arg]

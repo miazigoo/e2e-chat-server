@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 88
+exclude = .git,__pycache__,venv,.venv,migrations,.idea
+per-file-ignores =
+    alembic/versions/*.py:E501
+    tests/*:E501 F401 F841
