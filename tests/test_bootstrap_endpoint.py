@@ -4,12 +4,24 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.dependencies.auth import get_current_user
+from app.dependencies.auth import get_bootstrap_user
 from app.main import app
 
 
+async def override_bootstrap_user() -> Any:
+    return SimpleNamespace(
+        id=1,
+        nickname="@tester",
+        is_deleted=False,
+        pending_deletion=False,
+        is_active=True,
+        is_frozen=False,
+    )
+
+
 def test_bootstrap_endpoint(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_bootstrap_device(
         session: Any,
@@ -23,15 +35,15 @@ def test_bootstrap_endpoint(
             "prekeys_count": len(payload.one_time_prekeys),
         }
 
-    async def override_current_user() -> Any:
-        return SimpleNamespace(id=1, is_deleted=False, pending_deletion=False)
-
-    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_bootstrap_user] = override_bootstrap_user
     monkeypatch.setattr("app.api.v1.auth.bootstrap_device", fake_bootstrap_device)
 
     response = client.post(
         "/api/v1/auth/bootstrap",
-        headers={"Authorization": "Bearer test-token"},
+        headers={
+            "Authorization": "Bearer bootstrap-token",
+            "X-Device-UUID": "device-uuid-1",
+        },
         json={
             "device_uuid": "device-uuid-1",
             "device_name": "Pixel 8",

@@ -1,6 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import NotFoundError
+from app.core.storage import get_minio_client
 from app.models.attachment import Attachment
 from app.models.user import User
 from app.repositories.files import FilesRepository
@@ -14,7 +16,6 @@ files_repo = FilesRepository()
 
 
 def _attachment_to_schema(attachment: Attachment) -> AttachmentMetadataItemSchema:
-    """Convert ORM attachment model to API response schema."""
     return AttachmentMetadataItemSchema(
         attachment_id=attachment.id,
         attachment_uuid=attachment.attachment_uuid,
@@ -43,7 +44,6 @@ async def list_message_attachments(
     current_user: User,
     message_id: int,
 ) -> ListMessageAttachmentsResponseData:
-    """Return attachment metadata for a message visible to the current user."""
     attachments = await files_repo.list_message_attachments_for_user(
         session,
         message_id=message_id,
@@ -62,7 +62,6 @@ async def get_attachment_metadata(
     current_user: User,
     attachment_id: int,
 ) -> GetAttachmentResponseData:
-    """Return metadata for a single attachment if the current user has access."""
     attachment = await files_repo.get_attachment_for_user(
         session,
         attachment_id=attachment_id,
@@ -74,7 +73,22 @@ async def get_attachment_metadata(
             message="Attachment not found",
         )
 
+    can_download = attachment.deleted_at is None
+    download_url = None
+    expires_in = None
+
+    if can_download:
+        client = get_minio_client()
+        expires_in = settings.presigned_download_expire_seconds
+        download_url = client.presigned_get_object(
+            bucket_name=attachment.bucket_name,
+            object_name=attachment.storage_key,
+            expires=expires_in,
+        )
+
     return GetAttachmentResponseData(
         **_attachment_to_schema(attachment).model_dump(),
-        can_download=attachment.deleted_at is None,
+        can_download=can_download,
+        download_url=download_url,
+        download_url_expires_in=expires_in,
     )

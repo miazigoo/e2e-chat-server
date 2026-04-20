@@ -1,6 +1,6 @@
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.device import Device
 from app.models.user import User
 from app.repositories.devices import DevicesRepository
@@ -21,22 +21,16 @@ async def get_key_bundle_for_user(
     target_user_id: int,
 ) -> dict:
     if target_user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "SELF_BUNDLE_REQUEST_NOT_ALLOWED",
-                "message": "Cannot request bundle for yourself",
-            },
+        raise BadRequestError(
+            code="SELF_BUNDLE_REQUEST_NOT_ALLOWED",
+            message="Cannot request bundle for yourself",
         )
 
     target_user = await users_repo.get_by_id(session, target_user_id)
     if not target_user or target_user.is_deleted or target_user.pending_deletion:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "TARGET_USER_NOT_FOUND",
-                "message": "Target user not found",
-            },
+        raise NotFoundError(
+            code="TARGET_USER_NOT_FOUND",
+            message="Target user not found",
         )
 
     target_device = await devices_repo.get_active_by_user_id(
@@ -44,12 +38,9 @@ async def get_key_bundle_for_user(
         user_id=target_user_id,
     )
     if not target_device:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "TARGET_DEVICE_NOT_READY",
-                "message": "Target user has no active device",
-            },
+        raise ConflictError(
+            code="TARGET_DEVICE_NOT_READY",
+            message="Target user has no active device",
         )
 
     claimed_prekey = await keys_repo.claim_one_time_prekey(

@@ -31,6 +31,9 @@ class AttachmentInitItemSchema(BaseModel):
     bucket_name: str
     upload_status: str
     expires_at: datetime | None = None
+    upload_url: str | None = None
+    upload_method: str | None = None
+    upload_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class InitAttachmentsResponseData(BaseModel):
@@ -82,3 +85,5 @@ class ListMessageAttachmentsResponseData(BaseModel):
 
 class GetAttachmentResponseData(AttachmentMetadataItemSchema):
     can_download: bool = True
+    download_url: str | None = None
+    download_url_expires_in: int | None = None

@@ -4,7 +4,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, UnauthorizedError, BadRequestError, LockedError
+from app.core.exceptions import (
+    BadRequestError,
+    ConflictError,
+    LockedError,
+    UnauthorizedError,
+)
 from app.core.security import hash_password
 from app.models.auth_email_code import AuthEmailCode
 from app.models.login_attempt import LoginAttempt
@@ -191,8 +196,9 @@ async def test_verify_email_code_success(session: AsyncSession) -> None:
         ),
     )
 
-    assert "access_token" in verify_result
-    assert "refresh_token" in verify_result
+    assert "bootstrap_token" in verify_result
+    assert "bootstrap_expires_in" in verify_result
+    assert verify_result["bootstrap_expires_in"] > 0
 
     query = await session.execute(
         select(AuthEmailCode).where(AuthEmailCode.login_challenge_id == challenge_id)

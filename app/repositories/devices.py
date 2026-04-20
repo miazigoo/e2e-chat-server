@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,3 +130,38 @@ class DevicesRepository:
 
         await session.flush()
         return len(prekeys)
+
+    async def touch_last_seen(
+        self,
+        session: AsyncSession,
+        *,
+        device: Device,
+        seen_at: datetime,
+    ) -> Device:
+        device.last_seen_at = seen_at
+        await session.flush()
+        return device
+
+    async def update_fcm_token(
+        self,
+        session: AsyncSession,
+        *,
+        device: Device,
+        fcm_token: str | None,
+    ) -> Device:
+        device.fcm_token = fcm_token
+        await session.flush()
+        return device
+
+    async def revoke_device(
+        self,
+        session: AsyncSession,
+        *,
+        device: Device,
+        revoked_at: datetime,
+    ) -> Device:
+        device.is_active = False
+        if device.revoked_at is None:
+            device.revoked_at = revoked_at
+        await session.flush()
+        return device

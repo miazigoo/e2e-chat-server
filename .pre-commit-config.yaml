@@ -26,6 +26,7 @@ repos:
           - passlib
           - pyjwt
           - alembic
+          - types-redis
 
   - repo: local
     hooks:

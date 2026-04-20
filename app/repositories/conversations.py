@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_enums import EventType, ProtectionMode
@@ -112,64 +112,86 @@ class ConversationsRepository:
         from app.models.user import User
 
         conversations = await self.list_for_user(session, user_id=user_id)
+        if not conversations:
+            return []
+
+        conversation_ids = [conversation.id for conversation in conversations]
+
+        participants_result = await session.execute(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id.in_(conversation_ids),
+                ConversationParticipant.user_id == user_id,
+            )
+        )
+        participants = list(participants_result.scalars().all())
+        participant_by_conversation_id = {
+            participant.conversation_id: participant for participant in participants
+        }
+
+        peer_user_ids = {
+            (
+                conversation.user_b_id
+                if conversation.user_a_id == user_id
+                else conversation.user_a_id
+            )
+            for conversation in conversations
+        }
+
+        peers_result = await session.execute(
+            select(User).where(User.id.in_(peer_user_ids))
+        )
+        peers = list(peers_result.scalars().all())
+        peer_by_id = {peer.id: peer for peer in peers}
+
+        messages_result = await session.execute(
+            select(Message)
+            .where(
+                Message.conversation_id.in_(conversation_ids),
+                Message.is_deleted_global.is_(False),
+            )
+            .order_by(Message.conversation_id.asc(), Message.id.desc())
+        )
+        all_messages = list(messages_result.scalars().all())
+
+        last_message_by_conversation_id: dict[int, Message] = {}
+        unread_count_by_conversation_id: dict[int, int] = {
+            conversation_id: 0 for conversation_id in conversation_ids
+        }
+
+        for message in all_messages:
+            participant = participant_by_conversation_id.get(message.conversation_id)
+            cleared_at = participant.cleared_at if participant is not None else None
+
+            if cleared_at is not None and message.created_at <= cleared_at:
+                continue
+
+            if message.conversation_id not in last_message_by_conversation_id:
+                last_message_by_conversation_id[message.conversation_id] = message
+
+            if message.recipient_user_id == user_id and message.read_at is None:
+                unread_count_by_conversation_id[message.conversation_id] += 1
+
         items: list[dict[str, Any]] = []
 
         for conversation in conversations:
-            participant = await self.get_participant(
-                session,
-                conversation_id=conversation.id,
-                user_id=user_id,
-            )
-
             peer_user_id = (
                 conversation.user_b_id
                 if conversation.user_a_id == user_id
                 else conversation.user_a_id
             )
-
-            peer_result = await session.execute(
-                select(User).where(User.id == peer_user_id)
-            )
-            peer = peer_result.scalar_one_or_none()
-
-            last_message_stmt = (
-                select(Message)
-                .where(
-                    Message.conversation_id == conversation.id,
-                    Message.is_deleted_global.is_(False),
-                )
-                .order_by(Message.id.desc())
-                .limit(1)
-            )
-            if participant and participant.cleared_at is not None:
-                last_message_stmt = last_message_stmt.where(
-                    Message.created_at > participant.cleared_at
-                )
-
-            last_message_result = await session.execute(last_message_stmt)
-            last_message = last_message_result.scalar_one_or_none()
-
-            unread_stmt = select(func.count(Message.id)).where(
-                Message.conversation_id == conversation.id,
-                Message.recipient_user_id == user_id,
-                Message.read_at.is_(None),
-                Message.is_deleted_global.is_(False),
-            )
-            if participant and participant.cleared_at is not None:
-                unread_stmt = unread_stmt.where(
-                    Message.created_at > participant.cleared_at
-                )
-
-            unread_result = await session.execute(unread_stmt)
-            unread_count = int(unread_result.scalar() or 0)
+            peer = peer_by_id.get(peer_user_id)
 
             items.append(
                 {
                     "conversation": conversation,
                     "peer_user_id": peer_user_id,
                     "peer_nickname": peer.nickname if peer is not None else None,
-                    "unread_count": unread_count,
-                    "last_message": last_message,
+                    "unread_count": unread_count_by_conversation_id.get(
+                        conversation.id, 0
+                    ),
+                    "last_message": last_message_by_conversation_id.get(
+                        conversation.id
+                    ),
                 }
             )
 
@@ -276,3 +298,13 @@ class ConversationsRepository:
         session.add(event)
         await session.flush()
         return event
+
+    async def touch_conversation(
+        self,
+        session: AsyncSession,
+        *,
+        conversation: Conversation,
+        touched_at: datetime,
+    ) -> None:
+        conversation.updated_at = touched_at
+        await session.flush()

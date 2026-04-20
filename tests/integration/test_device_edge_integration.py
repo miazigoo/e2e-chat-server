@@ -1,8 +1,10 @@
+# coding=utf-8
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError
 from app.models.device import Device
 from app.schemas.devices import BootstrapDeviceRequest
 from app.services.device_service import bootstrap_device
@@ -13,25 +15,28 @@ async def test_bootstrap_rejects_non_android(session: AsyncSession) -> None:
     user = await create_user(session, nickname="@u1")
     await session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await bootstrap_device(
             session,
             current_user=user,
             payload=BootstrapDeviceRequest(
-                device_uuid="ios-device",
-                device_name="iPhone",
+                device_uuid="device-uuid-1",
+                device_name="Pixel",
                 platform="ios",
                 app_version="1.0.0",
                 public_identity_key="identity",
                 public_signing_key="signing",
                 signed_prekey="signed",
-                signed_prekey_signature="signature",
-                one_time_prekeys=[],
+                signed_prekey_signature="sig",
+                prekeys=[
+                    {"prekey_id": 1, "public_prekey": "pk1"},
+                ],
             ),
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "UNSUPPORTED_PLATFORM"
+    assert exc.value.code == "UNSUPPORTED_PLATFORM"
+    assert exc.value.message == "Only android platform is supported"
 
 
 async def test_bootstrap_existing_device_updates_it(session: AsyncSession) -> None:

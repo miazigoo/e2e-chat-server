@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, Text, func, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -124,6 +124,13 @@ class Message(Base):
         nullable=False,
     )
 
+    __table_args__ = (
+        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        Index("ix_messages_recipient_read", "recipient_user_id", "read_at"),
+        Index("ix_messages_expires_at", "expires_at"),
+        Index("ix_messages_sender", "sender_user_id", "created_at"),
+    )
+
 
 class MessageRecipientState(Base):
     __tablename__ = "message_recipient_states"
@@ -164,6 +171,14 @@ class MessageRecipientState(Base):
     )
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "recipient_device_id",
+            name="uq_message_recipient_states_message_device",
+        ),
+    )
+
 
 class MessageVisibilityOverride(Base):
     __tablename__ = "message_visibility_overrides"
@@ -191,4 +206,12 @@ class MessageVisibilityOverride(Base):
             values_callable=lambda enum_cls: [item.value for item in enum_cls],
         ),
         nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_message_visibility_overrides_message_user",
+        ),
     )

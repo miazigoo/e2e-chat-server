@@ -17,14 +17,18 @@ from app.core.exceptions import (
 )
 from app.core.security import (
     create_access_token,
+    create_bootstrap_token,
     create_refresh_token,
     decode_token,
     hash_password,
     hash_token,
     verify_password,
 )
+from app.models.auth_session import AuthSession
+from app.models.device import Device
 from app.repositories.auth import AuthRepository
 from app.repositories.auth_sessions import AuthSessionsRepository
+from app.repositories.devices import DevicesRepository
 from app.repositories.users import UsersRepository
 from app.schemas.auth import (
     LoginRequest,
@@ -36,6 +40,17 @@ from app.schemas.auth import (
 users_repo = UsersRepository()
 auth_repo = AuthRepository()
 auth_sessions_repo = AuthSessionsRepository()
+devices_repo = DevicesRepository()
+
+
+def _enqueue_purge_account(user_id: int, reason: str) -> None:
+    try:
+        from app.worker.tasks import purge_account_task
+
+        purge_account_task.delay(user_id, reason)
+    except Exception:
+        # fail-safe: account already gets frozen/pending_deletion
+        return
 
 
 def _now() -> datetime:
@@ -71,6 +86,18 @@ def _get_lock_duration_for_stage(stage: int) -> timedelta | None:
     if stage == 2:
         return timedelta(hours=24)
     return None
+
+
+def _bootstrap_response(*, user_id: int, nickname: str) -> dict:
+    bootstrap_token = create_bootstrap_token(
+        subject=str(user_id),
+        extra={"nickname": nickname},
+    )
+    return {
+        "requires_bootstrap": True,
+        "bootstrap_token": bootstrap_token,
+        "bootstrap_expires_in": settings.bootstrap_token_expire_minutes * 60,
+    }
 
 
 async def _issue_session_tokens(
@@ -123,6 +150,47 @@ async def _issue_session_tokens(
     }
 
 
+async def _resolve_device_for_auth(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    nickname: str,
+    device_uuid: str | None,
+) -> tuple[Device | None, dict | None]:
+    if device_uuid:
+        device = await devices_repo.get_by_user_and_uuid(
+            session,
+            user_id=user_id,
+            device_uuid=device_uuid,
+        )
+        if device and device.is_active and device.revoked_at is None:
+            return device, None
+
+        active_device = await devices_repo.get_active_by_user_id(
+            session,
+            user_id=user_id,
+        )
+        if active_device is None:
+            return None, _bootstrap_response(user_id=user_id, nickname=nickname)
+
+        raise ForbiddenError(
+            code="DEVICE_NOT_REGISTERED",
+            message="Device is not registered for this account",
+        )
+
+    active_device = await devices_repo.get_active_by_user_id(
+        session,
+        user_id=user_id,
+    )
+    if active_device is None:
+        return None, _bootstrap_response(user_id=user_id, nickname=nickname)
+
+    raise BadRequestError(
+        code="DEVICE_UUID_REQUIRED",
+        message="device_uuid is required for login on an existing device",
+    )
+
+
 async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict:
     existing_user = await users_repo.get_by_nickname(session, payload.nickname)
     if existing_user:
@@ -153,6 +221,7 @@ async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict
         "user_id": user.id,
         "nickname": user.nickname,
         "requires_device_registration": True,
+        **_bootstrap_response(user_id=user.id, nickname=user.nickname),
     }
 
 
@@ -162,6 +231,7 @@ async def login_user(
     *,
     ip_address: str | None = None,
     device_fingerprint: str | None = None,
+    user_agent: str | None = None,
 ) -> dict:
     user = await users_repo.get_by_nickname(session, payload.nickname)
 
@@ -182,10 +252,10 @@ async def login_user(
             message="Invalid nickname or password",
         )
 
-    if user.is_deleted or user.pending_deletion:
+    if user.is_deleted or user.pending_deletion or not user.is_active or user.is_frozen:
         raise ForbiddenError(
-            code="ACCOUNT_PENDING_DELETION",
-            message="Account is pending deletion",
+            code="ACCOUNT_UNAVAILABLE",
+            message="Account unavailable",
         )
 
     if user.lock_until and user.lock_until > _now():
@@ -218,6 +288,7 @@ async def login_user(
             if lock_duration is None:
                 user.pending_deletion = True
                 user.is_frozen = True
+                _enqueue_purge_account(user.id, "too_many_failed_attempts")
             else:
                 user.lock_until = _now() + lock_duration
                 user.failed_login_stage += 1
@@ -272,6 +343,7 @@ async def login_user(
 
         response = {
             "requires_email_code": True,
+            "requires_bootstrap": False,
             "login_challenge_id": login_challenge_id,
             "email_masked": _mask_email(user.email),
         }
@@ -281,28 +353,47 @@ async def login_user(
 
         return response
 
-    await session.commit()
+    device, bootstrap_data = await _resolve_device_for_auth(
+        session,
+        user_id=user.id,
+        nickname=user.nickname,
+        device_uuid=payload.device_uuid,
+    )
 
-    access_token = create_access_token(
-        subject=str(user.id),
-        extra={"nickname": user.nickname},
+    if bootstrap_data is not None:
+        await session.commit()
+        return {
+            "requires_email_code": False,
+            **bootstrap_data,
+        }
+
+    assert device is not None
+
+    tokens = await _issue_session_tokens(
+        session,
+        user_id=user.id,
+        nickname=user.nickname,
+        device_id=device.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
-    refresh_token = create_refresh_token(
-        subject=str(user.id),
-        extra={"nickname": user.nickname},
-    )
+    await session.commit()
 
     return {
         "requires_email_code": False,
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "expires_in": settings.access_token_expire_minutes * 60,
+        "requires_bootstrap": False,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "expires_in": tokens["expires_in"],
     }
 
 
 async def verify_email_code(
     session: AsyncSession,
     payload: VerifyEmailCodeRequest,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> dict:
     record = await auth_repo.get_email_code_by_challenge(
         session,
@@ -338,34 +429,58 @@ async def verify_email_code(
         )
 
     user = await users_repo.get_by_id(session, record.user_id)
-    if not user or user.is_deleted or user.pending_deletion:
+    if (
+        not user
+        or user.is_deleted
+        or user.pending_deletion
+        or not user.is_active
+        or user.is_frozen
+    ):
         raise ForbiddenError(
             code="ACCOUNT_UNAVAILABLE",
             message="Account unavailable",
         )
 
     record.consumed_at = _now()
+
+    device, bootstrap_data = await _resolve_device_for_auth(
+        session,
+        user_id=user.id,
+        nickname=user.nickname,
+        device_uuid=payload.device_uuid,
+    )
+
+    if bootstrap_data is not None:
+        await session.commit()
+        return bootstrap_data
+
+    assert device is not None
+
+    tokens = await _issue_session_tokens(
+        session,
+        user_id=user.id,
+        nickname=user.nickname,
+        device_id=device.id,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
     await session.commit()
 
-    access_token = create_access_token(
-        subject=str(user.id),
-        extra={"nickname": user.nickname},
-    )
-    refresh_token = create_refresh_token(
-        subject=str(user.id),
-        extra={"nickname": user.nickname},
-    )
-
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "expires_in": settings.access_token_expire_minutes * 60,
+        "requires_bootstrap": False,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens["refresh_token"],
+        "expires_in": tokens["expires_in"],
     }
 
 
 async def refresh_access_token(
     session: AsyncSession,
     payload: RefreshRequest,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> dict:
     try:
         token_data = decode_token(payload.refresh_token)
@@ -381,15 +496,50 @@ async def refresh_access_token(
             message="Token is not a refresh token",
         )
 
-    user_id = token_data.get("sub")
-    if not user_id:
+    user_id_raw = token_data.get("sub")
+    session_id = token_data.get("sid")
+    device_id_raw = token_data.get("device_id")
+
+    if not user_id_raw or not session_id or not device_id_raw:
         raise UnauthorizedError(
             code="INVALID_REFRESH_TOKEN",
             message="Invalid refresh token payload",
         )
 
-    user = await users_repo.get_by_id(session, int(user_id))
-    if not user or user.is_deleted or user.pending_deletion:
+    user_id = int(user_id_raw)
+    device_id = int(device_id_raw)
+
+    auth_session = await auth_sessions_repo.get_active_by_session_id(
+        session,
+        session_id=str(session_id),
+        now_dt=_now(),
+    )
+    if auth_session is None:
+        raise UnauthorizedError(
+            code="SESSION_NOT_FOUND",
+            message="Session is invalid or expired",
+        )
+
+    if auth_session.user_id != user_id or auth_session.device_id != device_id:
+        raise UnauthorizedError(
+            code="SESSION_TOKEN_MISMATCH",
+            message="Refresh token does not match the active session",
+        )
+
+    if auth_session.refresh_token_hash != hash_token(payload.refresh_token):
+        raise UnauthorizedError(
+            code="REFRESH_TOKEN_REVOKED",
+            message="Refresh token is no longer valid",
+        )
+
+    user = await users_repo.get_by_id(session, user_id)
+    if (
+        user is None
+        or user.is_deleted
+        or user.pending_deletion
+        or not user.is_active
+        or user.is_frozen
+    ):
         raise ForbiddenError(
             code="ACCOUNT_UNAVAILABLE",
             message="Account unavailable",
@@ -397,10 +547,66 @@ async def refresh_access_token(
 
     access_token = create_access_token(
         subject=str(user.id),
-        extra={"nickname": user.nickname},
+        extra={
+            "nickname": user.nickname,
+            "sid": auth_session.session_id,
+            "device_id": auth_session.device_id,
+        },
     )
+    refresh_token = create_refresh_token(
+        subject=str(user.id),
+        extra={
+            "nickname": user.nickname,
+            "sid": auth_session.session_id,
+            "device_id": auth_session.device_id,
+        },
+    )
+
+    await auth_sessions_repo.update_refresh_token_hash(
+        session,
+        auth_session_id=auth_session.id,
+        refresh_token_hash=hash_token(refresh_token),
+    )
+    await session.commit()
 
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "expires_in": settings.access_token_expire_minutes * 60,
+    }
+
+
+async def logout_current_session(
+    session: AsyncSession,
+    *,
+    current_session: AuthSession,
+) -> dict:
+    revoked = await auth_sessions_repo.revoke_by_session_id(
+        session,
+        session_id=current_session.session_id,
+        revoked_at=_now(),
+    )
+    await session.commit()
+
+    return {
+        "message": "Logged out",
+        "revoked_sessions": revoked,
+    }
+
+
+async def logout_all_sessions(
+    session: AsyncSession,
+    *,
+    user_id: int,
+) -> dict:
+    revoked = await auth_sessions_repo.revoke_all_for_user(
+        session,
+        user_id=user_id,
+        revoked_at=_now(),
+    )
+    await session.commit()
+
+    return {
+        "message": "All sessions revoked",
+        "revoked_sessions": revoked,
     }

@@ -48,6 +48,7 @@ def test_login_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
         payload: Any,
         ip_address: str | None = None,
         device_fingerprint: str | None = None,
+        user_agent: str | None = None,
     ) -> dict[str, Any]:
         return {
             "requires_email_code": False,

@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import audit_log
+from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.realtime import realtime_hub
 from app.models.chat_enums import EventType
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
@@ -27,12 +29,51 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _enqueue_recompute_unread(user_id: int) -> None:
+    try:
+        from app.worker.tasks import recompute_unread_counters_for_user_task
+
+        recompute_unread_counters_for_user_task.delay(user_id)
+    except Exception:
+        return
+
+
 def _peer_user_id(
-    conversation_user_a_id: int, conversation_user_b_id: int, current_user_id: int
+    conversation_user_a_id: int,
+    conversation_user_b_id: int,
+    current_user_id: int,
 ) -> int:
     if conversation_user_a_id == current_user_id:
         return conversation_user_b_id
     return conversation_user_a_id
+
+
+def _event_to_realtime_payload(
+    *,
+    conversation_id: int,
+    event_type: str,
+    event_id: int,
+    event_uuid: str,
+    actor_user_id: int | None,
+    actor_device_id: int | None,
+    target_message_id: int | None,
+    payload: dict | None,
+    created_at: datetime,
+) -> dict:
+    return {
+        "type": "conversation.event",
+        "conversation_id": conversation_id,
+        "event": {
+            "event_id": event_id,
+            "event_uuid": event_uuid,
+            "event_type": event_type,
+            "actor_user_id": actor_user_id,
+            "actor_device_id": actor_device_id,
+            "target_message_id": target_message_id,
+            "payload": payload,
+            "created_at": created_at.isoformat(),
+        },
+    }
 
 
 async def create_conversation(
@@ -42,22 +83,16 @@ async def create_conversation(
     payload: CreateConversationRequest,
 ) -> dict:
     if payload.recipient_user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "SELF_CONVERSATION_NOT_ALLOWED",
-                "message": "Cannot create conversation with yourself",
-            },
+        raise BadRequestError(
+            code="SELF_CONVERSATION_NOT_ALLOWED",
+            message="Cannot create conversation with yourself",
         )
 
     recipient = await users_repo.get_by_id(session, payload.recipient_user_id)
     if not recipient or recipient.is_deleted or recipient.pending_deletion:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "RECIPIENT_NOT_FOUND",
-                "message": "Recipient not found",
-            },
+        raise NotFoundError(
+            code="RECIPIENT_NOT_FOUND",
+            message="Recipient not found",
         )
 
     conversation = await conversations_repo.create_conversation(
@@ -144,12 +179,9 @@ async def get_conversation(
         user_id=current_user.id,
     )
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
         )
 
     return {
@@ -182,12 +214,9 @@ async def update_conversation(
         user_id=current_user.id,
     )
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
         )
 
     await conversations_repo.update_conversation(
@@ -218,12 +247,9 @@ async def clear_local(
         user_id=current_user.id,
     )
     if not participant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
         )
 
     cleared_at = _now()
@@ -232,7 +258,7 @@ async def clear_local(
         participant=participant,
         cleared_at=cleared_at,
     )
-    await conversations_repo.create_event(
+    event = await conversations_repo.create_event(
         session,
         conversation_id=conversation_id,
         actor_user_id=current_user.id,
@@ -241,7 +267,39 @@ async def clear_local(
         payload={"scope": "local"},
     )
 
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is not None:
+        await conversations_repo.touch_conversation(
+            session,
+            conversation=conversation,
+            touched_at=cleared_at,
+        )
+
     await session.commit()
+
+    audit_log(
+        "conversation_cleared_local",
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+    )
+    _enqueue_recompute_unread(current_user.id)
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
 
     return {
         "conversation_id": conversation_id,
@@ -264,12 +322,9 @@ async def clear_global(
         user_id=current_user.id,
     )
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
         )
 
     deleted_count = await messages_repo.clear_global_conversation(
@@ -279,7 +334,7 @@ async def clear_global(
         deleted_at=_now(),
     )
 
-    await conversations_repo.create_event(
+    event = await conversations_repo.create_event(
         session,
         conversation_id=conversation_id,
         actor_user_id=current_user.id,
@@ -292,7 +347,34 @@ async def clear_global(
         },
     )
 
+    await conversations_repo.touch_conversation(
+        session,
+        conversation=conversation,
+        touched_at=_now(),
+    )
+
     await session.commit()
+
+    audit_log(
+        "conversation_cleared_global",
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        extra={"deleted_messages_count": deleted_count},
+    )
+    _enqueue_recompute_unread(current_user.id)
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
 
     return {
         "conversation_id": conversation_id,

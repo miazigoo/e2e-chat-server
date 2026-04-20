@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -21,3 +23,28 @@ class BootstrapDeviceRequest(BaseModel):
     one_time_prekeys: list[OneTimePreKeyRequest] = Field(
         default_factory=list, max_length=200
     )
+
+
+class UpdateFcmTokenRequest(BaseModel):
+    fcm_token: str | None = Field(default=None, max_length=4096)
+
+
+class DeviceHeartbeatResponseData(BaseModel):
+    device_id: int
+    device_uuid: str
+    status: str
+    last_seen_at: datetime
+
+
+class UpdateFcmTokenResponseData(BaseModel):
+    device_id: int
+    updated: bool
+    fcm_token_present: bool
+    last_seen_at: datetime | None = None
+
+
+class RevokeCurrentDeviceResponseData(BaseModel):
+    device_id: int
+    revoked: bool
+    revoked_sessions: int
+    revoked_at: datetime

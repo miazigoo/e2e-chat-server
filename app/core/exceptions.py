@@ -147,3 +147,19 @@ class ValidationError(AppError):
             status_code=422,
             details=details,
         )
+
+
+class TooManyRequestsError(AppError):
+    def __init__(
+        self,
+        message: str = "Too many requests. Please try again later.",
+        *,
+        code: str = "RATE_LIMITED",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            code=code,
+            message=message,
+            status_code=429,
+            details=details,
+        )

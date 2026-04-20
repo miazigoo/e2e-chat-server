@@ -139,10 +139,11 @@ class FilesRepository:
         session: AsyncSession,
         *,
         user_id: int,
+        conversation_id: int,
         attachment_ids: list[int],
     ) -> list[Attachment]:
         result = await session.execute(
-            select(Attachment, UploadSession)
+            select(Attachment)
             .join(
                 UploadSession,
                 UploadSession.id == Attachment.upload_session_id,
@@ -150,12 +151,13 @@ class FilesRepository:
             .where(
                 Attachment.id.in_(attachment_ids),
                 UploadSession.user_id == user_id,
+                UploadSession.conversation_id == conversation_id,
                 UploadSession.completed_at.is_not(None),
                 Attachment.message_id.is_(None),
+                Attachment.deleted_at.is_(None),
             )
         )
-        rows = result.all()
-        return [row[0] for row in rows]
+        return list(result.scalars().all())
 
     async def link_attachments_to_message(
         self,

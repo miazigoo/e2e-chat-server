@@ -270,3 +270,19 @@ class MessagesRepository:
 
         await session.flush()
         return len(messages)
+
+    async def get_by_id_in_conversation(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+        conversation_id: int,
+    ) -> Message | None:
+        result = await session.execute(
+            select(Message).where(
+                Message.id == message_id,
+                Message.conversation_id == conversation_id,
+                Message.is_deleted_global.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()

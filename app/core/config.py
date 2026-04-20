@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(
         default=30, alias="REFRESH_TOKEN_EXPIRE_DAYS"
     )
+    bootstrap_token_expire_minutes: int = Field(
+        default=15, alias="BOOTSTRAP_TOKEN_EXPIRE_MINUTES"
+    )
 
     email_code_expire_minutes: int = Field(
         default=10, alias="EMAIL_CODE_EXPIRE_MINUTES"
@@ -44,11 +47,24 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
     minio_bucket_attachments: str = Field(alias="MINIO_BUCKET_ATTACHMENTS")
     minio_bucket_temp: str = Field(alias="MINIO_BUCKET_TEMP")
+    presigned_download_expire_seconds: int = Field(
+        default=300, alias="PRESIGNED_DOWNLOAD_EXPIRE_SECONDS"
+    )
+    presigned_upload_expire_seconds: int = Field(
+        default=900, alias="PRESIGNED_UPLOAD_EXPIRE_SECONDS"
+    )
 
     fcm_project_id: Optional[str] = Field(default=None, alias="FCM_PROJECT_ID")
     fcm_credentials_path: Optional[str] = Field(
         default=None, alias="FCM_CREDENTIALS_PATH"
     )
+    fcm_notification_ttl_seconds: int = Field(
+        default=300, alias="FCM_NOTIFICATION_TTL_SECONDS"
+    )
+
+    sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
+    sentry_environment: Optional[str] = Field(default=None, alias="SENTRY_ENVIRONMENT")
+    sentry_release: Optional[str] = Field(default=None, alias="SENTRY_RELEASE")
 
     backend_cors_origins_raw: str = Field(default="*", alias="BACKEND_CORS_ORIGINS")
 
@@ -58,6 +74,12 @@ class Settings(BaseSettings):
         if raw == "*":
             return ["*"]
         return [item.strip() for item in raw.split(",") if item.strip()]
+
+    @model_validator(mode="after")
+    def validate_prod_cors(self) -> "Settings":
+        if self.app_env == "production" and self.backend_cors_origins == ["*"]:
+            raise ValueError("BACKEND_CORS_ORIGINS cannot be '*' in production")
+        return self
 
 
 settings = Settings()  # type: ignore[call-arg]

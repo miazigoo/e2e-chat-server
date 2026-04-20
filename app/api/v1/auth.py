@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import COMMON_ERROR_RESPONSES
 from app.core.db import get_db
-from app.dependencies.auth import get_current_user
+from app.core.rate_limit import rate_limit_dependency
+from app.dependencies.auth import (
+    get_bootstrap_user,
+    get_current_session,
+    get_current_user,
+)
+from app.models.auth_session import AuthSession
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
@@ -23,6 +29,8 @@ from app.schemas.common import ApiErrorResponse, ApiResponse
 from app.schemas.devices import BootstrapDeviceRequest
 from app.services.auth_service import (
     login_user,
+    logout_all_sessions,
+    logout_current_session,
     refresh_access_token,
     register_user,
     verify_email_code,
@@ -46,17 +54,22 @@ AUTH_LOGIN_RESPONSES: dict[int | str, dict[str, Any]] = {
     summary="Register user",
     description="Create a new user account with nickname and password.",
     responses=COMMON_ERROR_RESPONSES,
+    dependencies=[
+        Depends(
+            rate_limit_dependency(
+                prefix="auth:register",
+                limit=10,
+                window_seconds=60,
+            )
+        )
+    ],
 )
 async def register(
     payload: RegisterRequest,
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> ApiResponse[RegisterResponseData]:
     data = await register_user(session, payload)
-    return {
-        "ok": True,
-        "data": data,
-        "meta": {},
-    }
+    return ApiResponse(data=RegisterResponseData(**data))
 
 
 @router.post(
@@ -68,86 +81,127 @@ async def register(
         "If email 2FA is enabled, returns a challenge instead of tokens."
     ),
     responses=AUTH_LOGIN_RESPONSES,
+    dependencies=[
+        Depends(
+            rate_limit_dependency(
+                prefix="auth:login",
+                limit=20,
+                window_seconds=60,
+            )
+        )
+    ],
 )
 async def login(
     payload: LoginRequest,
     request: Request,
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """Authenticate the user and return tokens or 2FA challenge."""
+) -> ApiResponse[LoginResponseData]:
     ip_address = request.client.host if request.client else None
     device_fingerprint = request.headers.get("X-Device-Fingerprint")
+    user_agent = request.headers.get("User-Agent")
 
     data = await login_user(
         session,
         payload,
         ip_address=ip_address,
         device_fingerprint=device_fingerprint,
+        user_agent=user_agent,
     )
-    return {
-        "ok": True,
-        "data": data,
-        "meta": {},
-    }
+    return ApiResponse(data=LoginResponseData(**data))
 
 
 @router.post(
     "/login/verify-email-code",
     response_model=ApiResponse[VerifyEmailCodeResponseData],
     summary="Verify email 2FA code",
-    description=(
-        "Validate the email verification code " "and issue access and refresh tokens."
-    ),
+    description="Validate the email verification code and continue authentication.",
     responses=COMMON_ERROR_RESPONSES,
+    dependencies=[
+        Depends(
+            rate_limit_dependency(
+                prefix="auth:verify-email-code",
+                limit=20,
+                window_seconds=300,
+            )
+        )
+    ],
 )
 async def verify_email_code_endpoint(
     payload: VerifyEmailCodeRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    data = await verify_email_code(session, payload)
-    return {
-        "ok": True,
-        "data": data,
-        "meta": {},
-    }
+) -> ApiResponse[VerifyEmailCodeResponseData]:
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("User-Agent")
+
+    data = await verify_email_code(
+        session,
+        payload,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    return ApiResponse(data=VerifyEmailCodeResponseData(**data))
 
 
 @router.post(
     "/refresh",
     response_model=ApiResponse[RefreshResponseData],
     summary="Refresh access token",
-    description="Issue a new access token using a valid refresh token.",
+    description="Rotate refresh token and issue a new access token.",
     responses=COMMON_ERROR_RESPONSES,
+    dependencies=[
+        Depends(
+            rate_limit_dependency(
+                prefix="auth:refresh",
+                limit=30,
+                window_seconds=60,
+            )
+        )
+    ],
 )
 async def refresh_token(
     payload: RefreshRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    data = await refresh_access_token(session, payload)
-    return {
-        "ok": True,
-        "data": data,
-        "meta": {},
-    }
+) -> ApiResponse[RefreshResponseData]:
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("User-Agent")
+
+    data = await refresh_access_token(
+        session,
+        payload,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    return ApiResponse(data=RefreshResponseData(**data))
 
 
 @router.post(
     "/bootstrap",
     summary="Register or update device bootstrap data",
     description=(
-        "Register device keys, signed prekey and one-time prekeys "
-        "for the authenticated user."
+        "Register device keys, signed prekey and one-time prekeys. "
+        "Accepts either a bootstrap token or a normal access token."
     ),
     responses=COMMON_ERROR_RESPONSES,
+    dependencies=[
+        Depends(
+            rate_limit_dependency(
+                prefix="auth:bootstrap",
+                limit=20,
+                window_seconds=60,
+            )
+        )
+    ],
 )
 async def bootstrap(
     payload: BootstrapDeviceRequest,
-    current_user: User = Depends(get_current_user),
+    bootstrap_user: User = Depends(get_bootstrap_user),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     data = await bootstrap_device(
         session,
-        current_user=current_user,
+        current_user=bootstrap_user,
         payload=payload,
     )
     return {
@@ -164,28 +218,30 @@ async def bootstrap(
     description="Revoke the current authenticated session.",
     responses=COMMON_ERROR_RESPONSES,
 )
-async def logout() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "data": {
-            "message": "Logged out",
-        },
-        "meta": {},
-    }
+async def logout(
+    current_session: AuthSession = Depends(get_current_session),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[LogoutResponseData]:
+    data = await logout_current_session(
+        session,
+        current_session=current_session,
+    )
+    return ApiResponse(data=LogoutResponseData(**data))
 
 
 @router.post(
     "/logout-all",
     response_model=ApiResponse[LogoutAllResponseData],
     summary="Logout all sessions",
-    description=("Revoke all authenticated sessions " "for the current user."),
+    description="Revoke all authenticated sessions for the current user.",
     responses=COMMON_ERROR_RESPONSES,
 )
-async def logout_all() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "data": {
-            "message": "All sessions revoked",
-        },
-        "meta": {},
-    }
+async def logout_all(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[LogoutAllResponseData]:
+    data = await logout_all_sessions(
+        session,
+        user_id=current_user.id,
+    )
+    return ApiResponse(data=LogoutAllResponseData(**data))

@@ -23,7 +23,7 @@ class ErrorBody(BaseModel):
 class ApiErrorResponse(BaseModel):
     ok: bool = False
     error: ErrorBody
-    meta: MetaSchema = MetaSchema()
+    meta: MetaSchema = Field(default_factory=MetaSchema)
 
 
 class HealthResponse(BaseModel):

@@ -1,11 +1,26 @@
-from fastapi import HTTPException, status
+from datetime import datetime, timezone
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError
+from app.models.device import Device
 from app.models.user import User
+from app.repositories.auth_sessions import AuthSessionsRepository
 from app.repositories.devices import DevicesRepository
-from app.schemas.devices import BootstrapDeviceRequest
+from app.schemas.devices import (
+    BootstrapDeviceRequest,
+    DeviceHeartbeatResponseData,
+    RevokeCurrentDeviceResponseData,
+    UpdateFcmTokenRequest,
+    UpdateFcmTokenResponseData,
+)
 
 devices_repo = DevicesRepository()
+auth_sessions_repo = AuthSessionsRepository()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def bootstrap_device(
@@ -15,12 +30,9 @@ async def bootstrap_device(
     payload: BootstrapDeviceRequest,
 ) -> dict:
     if payload.platform.lower() != "android":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "UNSUPPORTED_PLATFORM",
-                "message": "Only android platform is supported",
-            },
+        raise BadRequestError(
+            code="UNSUPPORTED_PLATFORM",
+            message="Only android platform is supported",
         )
 
     existing_device = await devices_repo.get_by_user_and_uuid(
@@ -29,8 +41,6 @@ async def bootstrap_device(
         device_uuid=payload.device_uuid,
     )
 
-    # Если это новое устройство — сначала деактивируем старое активное,
-    # чтобы не упереться в unique partial index.
     if existing_device is None:
         await devices_repo.deactivate_other_devices(
             session,
@@ -53,7 +63,6 @@ async def bootstrap_device(
         signed_prekey_signature=payload.signed_prekey_signature,
     )
 
-    # Если обновляем существующее устройство — оставляем только его активным.
     if existing_device is not None:
         await devices_repo.deactivate_other_devices(
             session,
@@ -61,7 +70,6 @@ async def bootstrap_device(
             keep_device_id=device.id,
         )
 
-    # Дедупликация prekeys на входе
     seen_ids: set[int] = set()
     normalized_prekeys: list[dict[str, str | int]] = []
     for item in payload.one_time_prekeys:
@@ -82,6 +90,7 @@ async def bootstrap_device(
     )
 
     device.prekeys_count = prekeys_count
+    device.last_seen_at = _now()
 
     await session.commit()
 
@@ -90,4 +99,91 @@ async def bootstrap_device(
         "device_uuid": device.device_uuid,
         "is_active": device.is_active,
         "prekeys_count": prekeys_count,
+        "last_seen_at": (
+            device.last_seen_at.isoformat() if device.last_seen_at else None
+        ),
     }
+
+
+async def heartbeat(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+) -> DeviceHeartbeatResponseData:
+    _ = current_user
+
+    seen_at = _now()
+    await devices_repo.touch_last_seen(
+        session,
+        device=current_device,
+        seen_at=seen_at,
+    )
+    await session.commit()
+
+    return DeviceHeartbeatResponseData(
+        device_id=current_device.id,
+        device_uuid=current_device.device_uuid,
+        status="online",
+        last_seen_at=seen_at,
+    )
+
+
+async def update_fcm_token(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    payload: UpdateFcmTokenRequest,
+) -> UpdateFcmTokenResponseData:
+    _ = current_user
+
+    await devices_repo.update_fcm_token(
+        session,
+        device=current_device,
+        fcm_token=payload.fcm_token,
+    )
+    await devices_repo.touch_last_seen(
+        session,
+        device=current_device,
+        seen_at=_now(),
+    )
+    await session.commit()
+
+    return UpdateFcmTokenResponseData(
+        device_id=current_device.id,
+        updated=True,
+        fcm_token_present=payload.fcm_token is not None,
+        last_seen_at=current_device.last_seen_at,
+    )
+
+
+async def revoke_current_device(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+) -> RevokeCurrentDeviceResponseData:
+    _ = current_user
+
+    revoked_at = _now()
+
+    await devices_repo.revoke_device(
+        session,
+        device=current_device,
+        revoked_at=revoked_at,
+    )
+    revoked_sessions = await auth_sessions_repo.revoke_all_for_device(
+        session,
+        device_id=current_device.id,
+        revoked_at=revoked_at,
+    )
+
+    await session.commit()
+
+    return RevokeCurrentDeviceResponseData(
+        device_id=current_device.id,
+        revoked=True,
+        revoked_sessions=revoked_sessions,
+        revoked_at=revoked_at,
+    )

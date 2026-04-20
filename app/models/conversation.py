@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime
+from sqlalchemy import Boolean, CheckConstraint, DateTime
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, Text, func, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -68,6 +68,15 @@ class Conversation(Base):
         nullable=False,
     )
 
+    __table_args__ = (
+        CheckConstraint(
+            "user_a_id <> user_b_id", name="ck_conversations_distinct_users"
+        ),
+        Index("ix_conversations_user_a", "user_a_id"),
+        Index("ix_conversations_user_b", "user_b_id"),
+        Index("ix_conversations_updated_at", "updated_at"),
+    )
+
 
 class ConversationParticipant(Base):
     __tablename__ = "conversation_participants"
@@ -93,6 +102,17 @@ class ConversationParticipant(Base):
     )
     cleared_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "user_id", name="uq_conversation_participants"
+        ),
+        Index(
+            "ix_conversation_participants_user_conversation",
+            "user_id",
+            "conversation_id",
+        ),
     )
 
 
@@ -137,4 +157,9 @@ class ConversationEvent(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_conversation_events_conversation_id", "conversation_id", "id"),
+        Index("ix_conversation_events_created_at", "created_at"),
     )

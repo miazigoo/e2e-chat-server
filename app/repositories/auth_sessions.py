@@ -150,6 +150,25 @@ class AuthSessionsRepository:
         result = await session.execute(stmt)
         return len(result.scalars().all())
 
+    async def revoke_all_for_device(
+        self,
+        session: AsyncSession,
+        *,
+        device_id: int,
+        revoked_at: datetime,
+    ) -> int:
+        stmt = (
+            update(AuthSession)
+            .where(
+                AuthSession.device_id == device_id,
+                AuthSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+            .returning(AuthSession.id)
+        )
+        result = await session.execute(stmt)
+        return len(result.scalars().all())
+
     async def delete_expired(
         self,
         session: AsyncSession,

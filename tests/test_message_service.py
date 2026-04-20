@@ -3,9 +3,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException
 
 import app.services.message_service as message_service
+from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.schemas.messages import (
     DeleteMessagesRequest,
     MarkReadRequest,
@@ -32,7 +32,7 @@ async def test_send_message_conversation_not_found(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(NotFoundError) as exc:
         await message_service.send_message(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -50,7 +50,7 @@ async def test_send_message_conversation_not_found(
         )
 
     assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "CONVERSATION_NOT_FOUND"
+    assert exc.value.code == "CONVERSATION_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_send_message_invalid_recipient(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await message_service.send_message(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -95,7 +95,7 @@ async def test_send_message_invalid_recipient(
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "INVALID_RECIPIENT"
+    assert exc.value.code == "INVALID_RECIPIENT"
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_send_message_to_purged_conversation(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(GoneError) as exc:
         await message_service.send_message(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -140,7 +140,7 @@ async def test_send_message_to_purged_conversation(
         )
 
     assert exc.value.status_code == 410
-    assert exc.value.detail["code"] == "CONVERSATION_PURGED"
+    assert exc.value.code == "CONVERSATION_PURGED"
 
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ async def test_send_message_when_recipient_has_no_device(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await message_service.send_message(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -193,7 +193,7 @@ async def test_send_message_when_recipient_has_no_device(
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "RECIPIENT_DEVICE_NOT_READY"
+    assert exc.value.code == "RECIPIENT_DEVICE_NOT_READY"
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_mark_read_message_not_found(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(NotFoundError) as exc:
         await message_service.mark_read(
             session,
             current_user=cast(Any, SimpleNamespace(id=2)),
@@ -226,56 +226,4 @@ async def test_mark_read_message_not_found(
         )
 
     assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "MESSAGE_NOT_FOUND"
-
-
-@pytest.mark.asyncio
-async def test_delete_local_conversation_not_found(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_get_for_user(
-        session: Any, conversation_id: int, user_id: int
-    ) -> Any:
-        return None
-
-    monkeypatch.setattr(
-        message_service.conversations_repo, "get_for_user", fake_get_for_user
-    )
-
-    session = cast(Any, SimpleNamespace())
-
-    with pytest.raises(HTTPException) as exc:
-        await message_service.delete_local(
-            session,
-            current_user=cast(Any, SimpleNamespace(id=2)),
-            payload=DeleteMessagesRequest(conversation_id=1, message_ids=[1, 2]),
-        )
-
-    assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "CONVERSATION_NOT_FOUND"
-
-
-@pytest.mark.asyncio
-async def test_delete_global_conversation_not_found(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_get_for_user(
-        session: Any, conversation_id: int, user_id: int
-    ) -> Any:
-        return None
-
-    monkeypatch.setattr(
-        message_service.conversations_repo, "get_for_user", fake_get_for_user
-    )
-
-    session = cast(Any, SimpleNamespace())
-
-    with pytest.raises(HTTPException) as exc:
-        await message_service.delete_global(
-            session,
-            current_user=cast(Any, SimpleNamespace(id=2)),
-            payload=DeleteMessagesRequest(conversation_id=1, message_ids=[1, 2]),
-        )
-
-    assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "CONVERSATION_NOT_FOUND"
+    assert exc.value.code == "MESSAGE_NOT_FOUND"

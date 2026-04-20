@@ -25,6 +25,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def make_user(**overrides: Any) -> SimpleNamespace:
+    base = {
+        "id": 1,
+        "nickname": "@tester",
+        "password_hash": "hash",
+        "is_deleted": False,
+        "pending_deletion": False,
+        "is_active": True,
+        "is_frozen": False,
+        "lock_until": None,
+        "failed_login_stage": 0,
+        "email_2fa_enabled": False,
+        "email": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 @pytest.mark.asyncio
 async def test_register_user_duplicate_nickname(
     monkeypatch: pytest.MonkeyPatch,
@@ -123,13 +141,7 @@ async def test_login_user_not_found(
 async def test_login_user_pending_deletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        is_deleted=False,
-        pending_deletion=True,
-        lock_until=None,
-    )
+    user = make_user(pending_deletion=True)
 
     async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
         return user
@@ -147,20 +159,14 @@ async def test_login_user_pending_deletion(
         )
 
     assert exc.value.status_code == 403
-    assert exc.value.code == "ACCOUNT_PENDING_DELETION"
+    assert exc.value.code == "ACCOUNT_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
 async def test_login_user_locked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        is_deleted=False,
-        pending_deletion=False,
-        lock_until=_now() + timedelta(hours=1),
-    )
+    user = make_user(lock_until=_now() + timedelta(hours=1))
 
     async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
         return user
@@ -185,16 +191,7 @@ async def test_login_user_locked(
 async def test_login_invalid_password_locks_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        password_hash="hash",
-        is_deleted=False,
-        pending_deletion=False,
-        lock_until=None,
-        failed_login_stage=0,
-        is_frozen=False,
-    )
+    user = make_user(failed_login_stage=0)
 
     async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
         return user
@@ -245,16 +242,7 @@ async def test_login_invalid_password_locks_account(
 async def test_login_invalid_password_sets_pending_deletion_on_final_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        password_hash="hash",
-        is_deleted=False,
-        pending_deletion=False,
-        lock_until=None,
-        failed_login_stage=3,
-        is_frozen=False,
-    )
+    user = make_user(failed_login_stage=3)
 
     async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
         return user
@@ -305,17 +293,7 @@ async def test_login_invalid_password_sets_pending_deletion_on_final_stage(
 async def test_login_success_without_2fa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        password_hash="hash",
-        is_deleted=False,
-        pending_deletion=False,
-        lock_until=None,
-        failed_login_stage=2,
-        email_2fa_enabled=False,
-        email=None,
-    )
+    user = make_user(failed_login_stage=2)
 
     async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
         return user
@@ -326,11 +304,23 @@ async def test_login_success_without_2fa(
     async def fake_commit() -> None:
         return None
 
+    async def fake_resolve_device_for_auth(
+        session: Any,
+        *,
+        user_id: int,
+        nickname: str,
+        device_uuid: str | None,
+    ) -> tuple[Any, dict[str, Any] | None]:
+        return SimpleNamespace(id=10), None
+
     monkeypatch.setattr(
         auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
     )
     monkeypatch.setattr(
         auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
+    )
+    monkeypatch.setattr(
+        auth_service, "_resolve_device_for_auth", fake_resolve_device_for_auth
     )
     monkeypatch.setattr(
         auth_service, "verify_password", lambda password, password_hash: True
@@ -341,12 +331,17 @@ async def test_login_success_without_2fa(
     monkeypatch.setattr(
         auth_service, "create_refresh_token", lambda subject, extra=None: "refresh"
     )
+
+    async def fake_create_auth_session(*args, **kwargs) -> None:
+        return None
+
     monkeypatch.setattr(
         auth_service.auth_sessions_repo,
         "create",
-        lambda *args, **kwargs: None,
+        fake_create_auth_session,
     )
     monkeypatch.setattr(auth_service, "hash_token", lambda token: "hashed-refresh")
+    monkeypatch.setattr(auth_service, "uuid4", lambda: "session-uuid")
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
@@ -367,13 +362,7 @@ async def test_login_success_without_2fa(
 async def test_login_success_with_2fa_returns_challenge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    user = SimpleNamespace(
-        id=1,
-        nickname="@tester",
-        password_hash="hash",
-        is_deleted=False,
-        pending_deletion=False,
-        lock_until=None,
+    user = make_user(
         failed_login_stage=0,
         email_2fa_enabled=True,
         email="tester@example.com",

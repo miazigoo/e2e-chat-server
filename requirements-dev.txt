@@ -8,3 +8,4 @@ pytest-cov
 httpx
 pre-commit
 testcontainers[postgresql]
+types-redis

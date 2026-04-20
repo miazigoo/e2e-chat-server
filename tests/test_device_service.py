@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.services.device_service as device_service
+from app.core.exceptions import BadRequestError
 from app.schemas.devices import BootstrapDeviceRequest
 
 
@@ -12,7 +13,7 @@ from app.schemas.devices import BootstrapDeviceRequest
 async def test_bootstrap_device_rejects_non_android() -> None:
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await device_service.bootstrap_device(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -30,7 +31,7 @@ async def test_bootstrap_device_rejects_non_android() -> None:
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "UNSUPPORTED_PLATFORM"
+    assert exc.value.code == "UNSUPPORTED_PLATFORM"
 
 
 @pytest.mark.asyncio

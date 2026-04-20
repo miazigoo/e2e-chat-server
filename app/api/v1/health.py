@@ -1,3 +1,4 @@
+import redis.asyncio as redis
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,6 @@ router = APIRouter(prefix="/health", tags=["health"])
 
 @router.get("/live", response_model=ApiResponse[HealthResponse])
 async def liveness() -> ApiResponse[HealthResponse]:
-    """Simple liveness probe. Returns success if the app process is alive."""
     return ApiResponse(
         data=HealthResponse(
             ok=True,
@@ -25,8 +25,13 @@ async def liveness() -> ApiResponse[HealthResponse]:
 async def readiness(
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[HealthResponse]:
-    """Readiness probe. Verifies that core dependencies are reachable."""
     await session.execute(text("SELECT 1"))
+
+    redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.ping()
+    finally:
+        await redis_client.close()
 
     return ApiResponse(
         data=HealthResponse(

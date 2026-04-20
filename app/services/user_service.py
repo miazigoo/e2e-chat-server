@@ -1,6 +1,6 @@
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError, NotFoundError
 from app.models.user import User
 from app.repositories.devices import DevicesRepository
 from app.repositories.users import UsersRepository
@@ -51,22 +51,16 @@ async def get_user_safety(
     target_user_id: int,
 ) -> UserSafetyResponseData:
     if target_user_id == current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "SELF_TARGET_NOT_ALLOWED",
-                "message": "Cannot inspect yourself as target user",
-            },
+        raise BadRequestError(
+            code="SELF_TARGET_NOT_ALLOWED",
+            message="Cannot inspect yourself as target user",
         )
 
     user = await users_repo.get_by_id(session, target_user_id)
     if user is None or user.is_deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "USER_NOT_FOUND",
-                "message": "User not found",
-            },
+        raise NotFoundError(
+            code="USER_NOT_FOUND",
+            message="User not found",
         )
 
     active_device = await devices_repo.get_active_by_user_id(

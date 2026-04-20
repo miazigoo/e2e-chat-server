@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.storage import get_minio_client
 from app.models.chat_enums import UploadSessionStatus
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
@@ -31,12 +32,21 @@ def _session_expires_at() -> datetime:
 
 
 def _temp_bucket_name() -> str:
-    # Совместимость с разными вариантами naming в Settings.
-    if hasattr(settings, "MINIO_BUCKET_TEMP"):
-        return str(settings.MINIO_BUCKET_TEMP)
-    if hasattr(settings, "minio_bucket_temp"):
-        return str(settings.minio_bucket_temp)
-    raise RuntimeError("MINIO temp bucket setting is not configured")
+    return settings.minio_bucket_temp
+
+
+def _build_presigned_put_url(
+    *,
+    bucket_name: str,
+    storage_key: str,
+) -> str:
+    client = get_minio_client()
+    url = client.presigned_put_object(
+        bucket_name=bucket_name,
+        object_name=storage_key,
+        expires=timedelta(seconds=settings.presigned_upload_expire_seconds),
+    )
+    return str(url)
 
 
 async def create_upload_session(
@@ -157,6 +167,12 @@ async def init_attachments(
             sha256_encrypted_blob=item.sha256_encrypted_blob,
             expires_at=upload_session.expires_at,
         )
+
+        upload_url = _build_presigned_put_url(
+            bucket_name=attachment.bucket_name,
+            storage_key=attachment.storage_key,
+        )
+
         created_items.append(
             AttachmentInitItemSchema(
                 attachment_id=attachment.id,
@@ -169,6 +185,9 @@ async def init_attachments(
                     else str(attachment.upload_status)
                 ),
                 expires_at=attachment.expires_at,
+                upload_url=upload_url,
+                upload_method="PUT",
+                upload_headers={},
             )
         )
 

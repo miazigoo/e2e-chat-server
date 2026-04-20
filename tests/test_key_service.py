@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 import app.services.key_service as key_service
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.schemas.keys import RefillPreKeysRequest, RotateSignedPreKeyRequest
 
 
@@ -135,7 +136,7 @@ async def test_get_key_bundle_for_user_success_without_prekey(
 async def test_get_key_bundle_for_user_rejects_self() -> None:
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await key_service.get_key_bundle_for_user(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -144,7 +145,7 @@ async def test_get_key_bundle_for_user_rejects_self() -> None:
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "SELF_BUNDLE_REQUEST_NOT_ALLOWED"
+    assert exc.value.code == "SELF_BUNDLE_REQUEST_NOT_ALLOWED"
 
 
 @pytest.mark.asyncio
@@ -158,7 +159,7 @@ async def test_get_key_bundle_for_user_target_not_found(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(NotFoundError) as exc:
         await key_service.get_key_bundle_for_user(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -167,7 +168,7 @@ async def test_get_key_bundle_for_user_target_not_found(
         )
 
     assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "TARGET_USER_NOT_FOUND"
+    assert exc.value.code == "TARGET_USER_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -193,7 +194,7 @@ async def test_get_key_bundle_for_user_no_active_device(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await key_service.get_key_bundle_for_user(
             session,
             current_user=cast(Any, SimpleNamespace(id=1)),
@@ -202,7 +203,7 @@ async def test_get_key_bundle_for_user_no_active_device(
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "TARGET_DEVICE_NOT_READY"
+    assert exc.value.code == "TARGET_DEVICE_NOT_READY"
 
 
 @pytest.mark.asyncio
