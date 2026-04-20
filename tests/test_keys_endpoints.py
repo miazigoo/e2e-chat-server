@@ -105,7 +105,9 @@ def test_get_key_bundle_not_found(
 
     assert response.status_code == 404
     body = response.json()
-    assert body["detail"]["code"] == "TARGET_USER_NOT_FOUND"
+    assert body["ok"] is False
+    assert body["error"]["code"] == "TARGET_USER_NOT_FOUND"
+    assert body["error"]["message"] == "Target user not found"
 
 
 def test_get_key_bundle_requires_auth(client: TestClient) -> None:

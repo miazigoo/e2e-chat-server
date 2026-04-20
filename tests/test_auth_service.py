@@ -3,9 +3,16 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException
 
 import app.services.auth_service as auth_service
+from app.core.exceptions import (
+    BadRequestError,
+    ConflictError,
+    ForbiddenError,
+    LockedError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from app.schemas.auth import (
     LoginRequest,
     RefreshRequest,
@@ -31,7 +38,7 @@ async def test_register_user_duplicate_nickname(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await auth_service.register_user(
             session,
             RegisterRequest(
@@ -43,7 +50,8 @@ async def test_register_user_duplicate_nickname(
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "NICKNAME_ALREADY_EXISTS"
+    assert exc.value.code == "NICKNAME_ALREADY_EXISTS"
+    assert exc.value.message == "Nickname already exists"
 
 
 @pytest.mark.asyncio
@@ -63,7 +71,7 @@ async def test_register_user_duplicate_email(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await auth_service.register_user(
             session,
             RegisterRequest(
@@ -75,7 +83,8 @@ async def test_register_user_duplicate_email(
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "EMAIL_ALREADY_EXISTS"
+    assert exc.value.code == "EMAIL_ALREADY_EXISTS"
+    assert exc.value.message == "Email already exists"
 
 
 @pytest.mark.asyncio
@@ -100,14 +109,14 @@ async def test_login_user_not_found(
         auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(UnauthorizedError) as exc:
         await auth_service.login_user(
             session,
             LoginRequest(nickname="@missing", password="badpass123"),
         )
 
     assert exc.value.status_code == 401
-    assert exc.value.detail["code"] == "INVALID_CREDENTIALS"
+    assert exc.value.code == "INVALID_CREDENTIALS"
 
 
 @pytest.mark.asyncio
@@ -131,14 +140,14 @@ async def test_login_user_pending_deletion(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await auth_service.login_user(
             session,
             LoginRequest(nickname="@tester", password="supersecret123"),
         )
 
     assert exc.value.status_code == 403
-    assert exc.value.detail["code"] == "ACCOUNT_PENDING_DELETION"
+    assert exc.value.code == "ACCOUNT_PENDING_DELETION"
 
 
 @pytest.mark.asyncio
@@ -162,14 +171,14 @@ async def test_login_user_locked(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(LockedError) as exc:
         await auth_service.login_user(
             session,
             LoginRequest(nickname="@tester", password="supersecret123"),
         )
 
     assert exc.value.status_code == 423
-    assert exc.value.detail["code"] == "ACCOUNT_LOCKED"
+    assert exc.value.code == "ACCOUNT_LOCKED"
 
 
 @pytest.mark.asyncio
@@ -220,14 +229,14 @@ async def test_login_invalid_password_locks_account(
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(LockedError) as exc:
         await auth_service.login_user(
             session,
             LoginRequest(nickname="@tester", password="wrongpassword"),
         )
 
     assert exc.value.status_code == 423
-    assert exc.value.detail["code"] == "ACCOUNT_LOCKED"
+    assert exc.value.code == "ACCOUNT_LOCKED"
     assert user.lock_until is not None
     assert user.failed_login_stage == 1
 
@@ -280,14 +289,14 @@ async def test_login_invalid_password_sets_pending_deletion_on_final_stage(
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ForbiddenError) as exc:
         await auth_service.login_user(
             session,
             LoginRequest(nickname="@tester", password="wrongpassword"),
         )
 
     assert exc.value.status_code == 403
-    assert exc.value.detail["code"] == "ACCOUNT_PENDING_DELETION"
+    assert exc.value.code == "ACCOUNT_PENDING_DELETION"
     assert user.pending_deletion is True
     assert user.is_frozen is True
 
@@ -332,6 +341,12 @@ async def test_login_success_without_2fa(
     monkeypatch.setattr(
         auth_service, "create_refresh_token", lambda subject, extra=None: "refresh"
     )
+    monkeypatch.setattr(
+        auth_service.auth_sessions_repo,
+        "create",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(auth_service, "hash_token", lambda token: "hashed-refresh")
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
@@ -343,6 +358,7 @@ async def test_login_success_without_2fa(
     assert result["requires_email_code"] is False
     assert result["access_token"] == "access"
     assert result["refresh_token"] == "refresh"
+    assert result["expires_in"] > 0
     assert user.lock_until is None
     assert user.failed_login_stage == 0
 
@@ -418,7 +434,7 @@ async def test_verify_email_code_challenge_not_found(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(NotFoundError) as exc:
         await auth_service.verify_email_code(
             session,
             VerifyEmailCodeRequest(
@@ -428,7 +444,7 @@ async def test_verify_email_code_challenge_not_found(
         )
 
     assert exc.value.status_code == 404
-    assert exc.value.detail["code"] == "CHALLENGE_NOT_FOUND"
+    assert exc.value.code == "CHALLENGE_NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -462,7 +478,7 @@ async def test_verify_email_code_invalid_code(
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await auth_service.verify_email_code(
             session,
             VerifyEmailCodeRequest(
@@ -472,7 +488,7 @@ async def test_verify_email_code_invalid_code(
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "INVALID_EMAIL_CODE"
+    assert exc.value.code == "INVALID_EMAIL_CODE"
     assert record.attempts == 1
 
 
@@ -487,14 +503,14 @@ async def test_refresh_access_token_invalid_token(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(UnauthorizedError) as exc:
         await auth_service.refresh_access_token(
             session,
             RefreshRequest(refresh_token="bad-token"),
         )
 
     assert exc.value.status_code == 401
-    assert exc.value.detail["code"] == "INVALID_REFRESH_TOKEN"
+    assert exc.value.code == "INVALID_REFRESH_TOKEN"
 
 
 @pytest.mark.asyncio
@@ -509,11 +525,11 @@ async def test_refresh_access_token_wrong_type(
 
     session = cast(Any, SimpleNamespace())
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(UnauthorizedError) as exc:
         await auth_service.refresh_access_token(
             session,
             RefreshRequest(refresh_token="not-refresh"),
         )
 
     assert exc.value.status_code == 401
-    assert exc.value.detail["code"] == "INVALID_TOKEN_TYPE"
+    assert exc.value.code == "INVALID_TOKEN_TYPE"

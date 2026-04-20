@@ -6,9 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.dependencies.auth import get_current_user
 from app.models.user import User
+from app.schemas.common import ApiResponse
 from app.schemas.conversations import (
     ClearConversationRequest,
     CreateConversationRequest,
+    ListConversationsResponseData,
     UpdateConversationRequest,
 )
 from app.services.conversation_service import (
@@ -38,13 +40,16 @@ async def create_conversation_endpoint(
     return {"ok": True, "data": data, "meta": {}}
 
 
-@router.get("")
+@router.get(
+    "",
+    response_model=ApiResponse[ListConversationsResponseData],
+)
 async def list_conversations_endpoint(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> ApiResponse[ListConversationsResponseData]:
     data = await list_conversations(session, current_user=current_user)
-    return {"ok": True, "data": data, "meta": {}}
+    return ApiResponse(data=data)
 
 
 @router.get("/{conversation_id}")

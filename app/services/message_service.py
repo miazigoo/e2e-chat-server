@@ -8,6 +8,7 @@ from app.models.device import Device
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
 from app.repositories.devices import DevicesRepository
+from app.repositories.files import FilesRepository
 from app.repositories.messages import MessagesRepository
 from app.schemas.messages import (
     DeleteMessagesRequest,
@@ -18,6 +19,7 @@ from app.schemas.messages import (
 conversations_repo = ConversationsRepository()
 messages_repo = MessagesRepository()
 devices_repo = DevicesRepository()
+files_repo = FilesRepository()
 
 
 def _now() -> datetime:
@@ -101,6 +103,22 @@ async def send_message(
             },
         )
 
+    attachments = []
+    if payload.attachment_ids:
+        attachments = await files_repo.get_attachments_for_user_linking(
+            session,
+            user_id=current_user.id,
+            attachment_ids=payload.attachment_ids,
+        )
+        if len(attachments) != len(payload.attachment_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_ATTACHMENT_IDS",
+                    "message": "One or more attachments are invalid or unavailable",
+                },
+            )
+
     expires_at = _resolve_expires_at(
         explicit_expires_at=payload.expires_at,
         conversation_ttl_days=conversation.message_ttl_days,
@@ -111,15 +129,38 @@ async def send_message(
         else conversation.delete_after_read_seconds
     )
 
+    existing_message = (
+        await messages_repo.get_by_message_uuid(
+            session,
+            conversation_id=conversation.id,
+            sender_user_id=current_user.id,
+            message_uuid=payload.message_uuid,
+        )
+        if payload.message_uuid
+        else None
+    )
+
+    if existing_message is not None:
+        return {
+            "message_id": existing_message.id,
+            "message_uuid": existing_message.message_uuid,
+            "conversation_id": existing_message.conversation_id,
+            "recipient_user_id": existing_message.recipient_user_id,
+            "recipient_device_id": existing_message.recipient_device_id,
+            "server_received_at": existing_message.server_received_at,
+            "delivery_status": "server_received",
+            "is_idempotent_replay": True,
+        }
+
     message = await messages_repo.create_message(
         session,
-        conversation_id=payload.conversation_id,
+        conversation_id=conversation.id,
         sender_user_id=current_user.id,
         sender_device_id=current_device.id,
         recipient_user_id=payload.recipient_user_id,
         recipient_device_id=recipient_device.id,
-        reply_to_message_id=payload.reply_to_message_id,
         message_uuid=payload.message_uuid,
+        reply_to_message_id=payload.reply_to_message_id,
         message_type=payload.message_type,
         ciphertext=payload.ciphertext,
         ciphertext_version=payload.ciphertext_version,
@@ -139,17 +180,36 @@ async def send_message(
         recipient_device_id=recipient_device.id,
     )
 
+    if attachments:
+        await files_repo.link_attachments_to_message(
+            session,
+            attachments=attachments,
+            message_id=message.id,
+        )
+
     await conversations_repo.create_event(
         session,
-        conversation_id=payload.conversation_id,
+        conversation_id=conversation.id,
         actor_user_id=current_user.id,
         actor_device_id=current_device.id,
         event_type=EventType.MESSAGE_CREATED,
         target_message_id=message.id,
         payload={
             "message_id": message.id,
-            "message_type": payload.message_type.value,
-            "has_attachments": bool(payload.attachment_ids),
+            "message_uuid": message.message_uuid,
+            "attachment_ids": payload.attachment_ids,
+            "sender_user_id": message.sender_user_id,
+            "sender_device_id": message.sender_device_id,
+            "recipient_user_id": message.recipient_user_id,
+            "recipient_device_id": message.recipient_device_id,
+            "message_type": message.message_type.value,
+            "has_attachments": message.has_attachments,
+            "client_created_at": message.client_created_at.isoformat(),
+            "server_received_at": (
+                message.server_received_at.isoformat()
+                if message.server_received_at
+                else None
+            ),
         },
     )
 
@@ -158,8 +218,12 @@ async def send_message(
     return {
         "message_id": message.id,
         "message_uuid": message.message_uuid,
+        "conversation_id": message.conversation_id,
+        "recipient_user_id": message.recipient_user_id,
+        "recipient_device_id": message.recipient_device_id,
+        "server_received_at": message.server_received_at,
         "delivery_status": "server_received",
-        "server_received_at": message.server_received_at.isoformat(),
+        "is_idempotent_replay": False,
     }
 
 

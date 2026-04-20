@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: secure-chat-dashboards
+    orgId: 1
+    folder: Secure Chat
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

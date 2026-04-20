@@ -1,3 +1,4 @@
+from app.models.attachment import Attachment, UploadSession
 from app.models.auth_email_code import AuthEmailCode
 from app.models.auth_session import AuthSession
 from app.models.base import Base
@@ -14,16 +15,18 @@ from app.models.user import User
 
 __all__ = [
     "Base",
-    "User",
+    "Attachment",
+    "UploadSession",
+    "AuthEmailCode",
+    "AuthSession",
+    "Conversation",
+    "ConversationEvent",
+    "ConversationParticipant",
     "Device",
     "DevicePreKey",
-    "AuthSession",
     "LoginAttempt",
-    "AuthEmailCode",
-    "Conversation",
-    "ConversationParticipant",
-    "ConversationEvent",
     "Message",
     "MessageRecipientState",
     "MessageVisibilityOverride",
+    "User",
 ]

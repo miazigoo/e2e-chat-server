@@ -10,7 +10,11 @@ from app.repositories.messages import MessagesRepository
 from app.repositories.users import UsersRepository
 from app.schemas.conversations import (
     ClearConversationRequest,
+    ConversationLastMessageSchema,
+    ConversationListItemSchema,
+    ConversationPeerSchema,
     CreateConversationRequest,
+    ListConversationsResponseData,
     UpdateConversationRequest,
 )
 
@@ -81,38 +85,51 @@ async def list_conversations(
     session: AsyncSession,
     *,
     current_user: User,
-) -> dict:
-    conversations = await conversations_repo.list_for_user(
+) -> ListConversationsResponseData:
+    rows = await conversations_repo.list_overview_for_user(
         session,
         user_id=current_user.id,
     )
 
-    items: list[dict] = []
-    for conversation in conversations:
-        if conversation.is_purged:
-            continue
+    items: list[ConversationListItemSchema] = []
+    for row in rows:
+        conversation = row["conversation"]
+        last_message = row["last_message"]
+
+        last_message_schema = None
+        if last_message is not None:
+            last_message_schema = ConversationLastMessageSchema(
+                message_id=last_message.id,
+                message_uuid=last_message.message_uuid,
+                sender_user_id=last_message.sender_user_id,
+                recipient_user_id=last_message.recipient_user_id,
+                message_type=last_message.message_type.value,
+                client_created_at=last_message.client_created_at,
+                server_received_at=last_message.server_received_at,
+                has_attachments=last_message.has_attachments,
+            )
 
         items.append(
-            {
-                "conversation_id": conversation.id,
-                "conversation_uuid": conversation.conversation_uuid,
-                "title": conversation.title,
-                "peer_user_id": _peer_user_id(
-                    conversation.user_a_id,
-                    conversation.user_b_id,
-                    current_user.id,
+            ConversationListItemSchema(
+                conversation_id=conversation.id,
+                conversation_uuid=conversation.conversation_uuid,
+                title=conversation.title,
+                protection_mode=conversation.protection_mode,
+                message_ttl_days=conversation.message_ttl_days,
+                delete_after_read_seconds=conversation.delete_after_read_seconds,
+                is_active=conversation.is_active,
+                is_purged=conversation.is_purged,
+                updated_at=conversation.updated_at,
+                peer=ConversationPeerSchema(
+                    user_id=row["peer_user_id"],
+                    nickname=row["peer_nickname"],
                 ),
-                "protection_mode": conversation.protection_mode.value,
-                "message_ttl_days": conversation.message_ttl_days,
-                "delete_after_read_seconds": conversation.delete_after_read_seconds,
-                "is_active": conversation.is_active,
-                "is_purged": conversation.is_purged,
-                "created_at": conversation.created_at.isoformat(),
-                "updated_at": conversation.updated_at.isoformat(),
-            }
+                unread_count=row["unread_count"],
+                last_message=last_message_schema,
+            )
         )
 
-    return {"items": items}
+    return ListConversationsResponseData(items=items)
 
 
 async def get_conversation(

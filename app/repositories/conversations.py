@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_enums import EventType, ProtectionMode
@@ -102,6 +102,79 @@ class ConversationsRepository:
         )
         return list(result.scalars().all())
 
+    async def list_overview_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+    ) -> list[dict[str, Any]]:
+        from app.models.message import Message
+        from app.models.user import User
+
+        conversations = await self.list_for_user(session, user_id=user_id)
+        items: list[dict[str, Any]] = []
+
+        for conversation in conversations:
+            participant = await self.get_participant(
+                session,
+                conversation_id=conversation.id,
+                user_id=user_id,
+            )
+
+            peer_user_id = (
+                conversation.user_b_id
+                if conversation.user_a_id == user_id
+                else conversation.user_a_id
+            )
+
+            peer_result = await session.execute(
+                select(User).where(User.id == peer_user_id)
+            )
+            peer = peer_result.scalar_one_or_none()
+
+            last_message_stmt = (
+                select(Message)
+                .where(
+                    Message.conversation_id == conversation.id,
+                    Message.is_deleted_global.is_(False),
+                )
+                .order_by(Message.id.desc())
+                .limit(1)
+            )
+            if participant and participant.cleared_at is not None:
+                last_message_stmt = last_message_stmt.where(
+                    Message.created_at > participant.cleared_at
+                )
+
+            last_message_result = await session.execute(last_message_stmt)
+            last_message = last_message_result.scalar_one_or_none()
+
+            unread_stmt = select(func.count(Message.id)).where(
+                Message.conversation_id == conversation.id,
+                Message.recipient_user_id == user_id,
+                Message.read_at.is_(None),
+                Message.is_deleted_global.is_(False),
+            )
+            if participant and participant.cleared_at is not None:
+                unread_stmt = unread_stmt.where(
+                    Message.created_at > participant.cleared_at
+                )
+
+            unread_result = await session.execute(unread_stmt)
+            unread_count = int(unread_result.scalar() or 0)
+
+            items.append(
+                {
+                    "conversation": conversation,
+                    "peer_user_id": peer_user_id,
+                    "peer_nickname": peer.nickname if peer is not None else None,
+                    "unread_count": unread_count,
+                    "last_message": last_message,
+                }
+            )
+
+        return items
+
     async def get_participant(
         self,
         session: AsyncSession,
@@ -116,6 +189,40 @@ class ConversationsRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_events_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        after_event_id: int | None,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[ConversationEvent]:
+        participant = await self.get_participant(
+            session,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        if participant is None:
+            return []
+
+        stmt = (
+            select(ConversationEvent)
+            .where(ConversationEvent.conversation_id == conversation_id)
+            .order_by(ConversationEvent.id.asc())
+            .limit(limit)
+        )
+
+        if after_event_id is not None:
+            stmt = stmt.where(ConversationEvent.id > after_event_id)
+
+        if cleared_at is not None:
+            stmt = stmt.where(ConversationEvent.created_at > cleared_at)
+
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
 
     async def update_conversation(
         self,

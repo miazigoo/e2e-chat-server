@@ -174,48 +174,63 @@ async def test_clear_global_conversation_not_found(
 async def test_list_conversations_filters_purged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    active = SimpleNamespace(
+    conversation_active = SimpleNamespace(
         id=1,
-        conversation_uuid="uuid-1",
-        title="active",
-        user_a_id=1,
-        user_b_id=2,
-        protection_mode=SimpleNamespace(value="normal"),
+        conversation_uuid="11111111-1111-1111-1111-111111111111",
+        title="Active",
+        protection_mode="normal",
         message_ttl_days=60,
         delete_after_read_seconds=None,
         is_active=True,
         is_purged=False,
-        created_at=_dt(),
-        updated_at=_dt(),
+        updated_at=datetime.now(timezone.utc),
     )
-    purged = SimpleNamespace(
+    conversation_purged = SimpleNamespace(
         id=2,
-        conversation_uuid="uuid-2",
-        title="purged",
-        user_a_id=1,
-        user_b_id=3,
-        protection_mode=SimpleNamespace(value="normal"),
+        conversation_uuid="22222222-2222-2222-2222-222222222222",
+        title="Purged",
+        protection_mode="normal",
         message_ttl_days=60,
         delete_after_read_seconds=None,
         is_active=True,
         is_purged=True,
-        created_at=_dt(),
-        updated_at=_dt(),
+        updated_at=datetime.now(timezone.utc),
     )
 
-    async def fake_list_for_user(session: Any, user_id: int) -> list[Any]:
-        return [active, purged]
+    async def fake_list_overview_for_user(
+        session: Any, *, user_id: int
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "conversation": conversation_active,
+                "peer_user_id": 2,
+                "peer_nickname": "@alice",
+                "unread_count": 1,
+                "last_message": None,
+            },
+            {
+                "conversation": conversation_purged,
+                "peer_user_id": 3,
+                "peer_nickname": "@bob",
+                "unread_count": 0,
+                "last_message": None,
+            },
+        ]
 
     monkeypatch.setattr(
-        conversation_service.conversations_repo, "list_for_user", fake_list_for_user
+        conversation_service.conversations_repo,
+        "list_overview_for_user",
+        fake_list_overview_for_user,
     )
 
     session = cast(Any, SimpleNamespace())
+    current_user = cast(Any, SimpleNamespace(id=1))
 
     result = await conversation_service.list_conversations(
         session,
-        current_user=cast(Any, SimpleNamespace(id=1)),
+        current_user=current_user,
     )
 
-    assert len(result["items"]) == 1
-    assert result["items"][0]["conversation_id"] == 1
+    assert len(result.items) == 2
+    assert result.items[0].peer.nickname == "@alice"
+    assert result.items[1].peer.nickname == "@bob"

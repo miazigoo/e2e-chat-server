@@ -4,18 +4,27 @@ import string
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import (
+    BadRequestError,
+    ConflictError,
+    ForbiddenError,
+    LockedError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
+    hash_token,
     verify_password,
 )
 from app.repositories.auth import AuthRepository
+from app.repositories.auth_sessions import AuthSessionsRepository
 from app.repositories.users import UsersRepository
 from app.schemas.auth import (
     LoginRequest,
@@ -26,6 +35,7 @@ from app.schemas.auth import (
 
 users_repo = UsersRepository()
 auth_repo = AuthRepository()
+auth_sessions_repo = AuthSessionsRepository()
 
 
 def _now() -> datetime:
@@ -63,26 +73,70 @@ def _get_lock_duration_for_stage(stage: int) -> timedelta | None:
     return None
 
 
+async def _issue_session_tokens(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    nickname: str,
+    device_id: int,
+    ip_address: str | None,
+    user_agent: str | None,
+) -> dict:
+    session_id = str(uuid4())
+    issued_at = _now()
+    expires_at = issued_at + timedelta(days=settings.refresh_token_expire_days)
+
+    access_token = create_access_token(
+        subject=str(user_id),
+        extra={
+            "nickname": nickname,
+            "sid": session_id,
+            "device_id": device_id,
+        },
+    )
+    refresh_token = create_refresh_token(
+        subject=str(user_id),
+        extra={
+            "nickname": nickname,
+            "sid": session_id,
+            "device_id": device_id,
+        },
+    )
+
+    await auth_sessions_repo.create(
+        session,
+        session_id=session_id,
+        user_id=user_id,
+        device_id=device_id,
+        refresh_token_hash=hash_token(refresh_token),
+        issued_at=issued_at,
+        expires_at=expires_at,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_in": settings.access_token_expire_minutes * 60,
+        "session_id": session_id,
+    }
+
+
 async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict:
     existing_user = await users_repo.get_by_nickname(session, payload.nickname)
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "NICKNAME_ALREADY_EXISTS",
-                "message": "Nickname already exists",
-            },
+        raise ConflictError(
+            code="NICKNAME_ALREADY_EXISTS",
+            message="Nickname already exists",
         )
 
     if payload.email:
         existing_email = await users_repo.get_by_email(session, payload.email)
         if existing_email:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "EMAIL_ALREADY_EXISTS",
-                    "message": "Email already exists",
-                },
+            raise ConflictError(
+                code="EMAIL_ALREADY_EXISTS",
+                message="Email already exists",
             )
 
     user = await users_repo.create_user(
@@ -123,30 +177,21 @@ async def login_user(
         )
         await session.commit()
 
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_CREDENTIALS",
-                "message": "Invalid nickname or password",
-            },
+        raise UnauthorizedError(
+            code="INVALID_CREDENTIALS",
+            message="Invalid nickname or password",
         )
 
     if user.is_deleted or user.pending_deletion:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "ACCOUNT_PENDING_DELETION",
-                "message": "Account is pending deletion",
-            },
+        raise ForbiddenError(
+            code="ACCOUNT_PENDING_DELETION",
+            message="Account is pending deletion",
         )
 
     if user.lock_until and user.lock_until > _now():
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail={
-                "code": "ACCOUNT_LOCKED",
-                "message": f"Account is locked until {user.lock_until.isoformat()}",
-            },
+        raise LockedError(
+            code="ACCOUNT_LOCKED",
+            message=f"Account is locked until {user.lock_until.isoformat()}",
         )
 
     if not verify_password(payload.password, user.password_hash):
@@ -180,29 +225,20 @@ async def login_user(
         await session.commit()
 
         if user.pending_deletion:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "ACCOUNT_PENDING_DELETION",
-                    "message": "Account is pending deletion",
-                },
+            raise ForbiddenError(
+                code="ACCOUNT_PENDING_DELETION",
+                message="Account is pending deletion",
             )
 
         if user.lock_until and user.lock_until > _now():
-            raise HTTPException(
-                status_code=status.HTTP_423_LOCKED,
-                detail={
-                    "code": "ACCOUNT_LOCKED",
-                    "message": f"Account is locked until {user.lock_until.isoformat()}",
-                },
+            raise LockedError(
+                code="ACCOUNT_LOCKED",
+                message=f"Account is locked until {user.lock_until.isoformat()}",
             )
 
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_CREDENTIALS",
-                "message": "Invalid nickname or password",
-            },
+        raise UnauthorizedError(
+            code="INVALID_CREDENTIALS",
+            message="Invalid nickname or password",
         )
 
     await auth_repo.create_login_attempt(
@@ -240,7 +276,6 @@ async def login_user(
             "email_masked": _mask_email(user.email),
         }
 
-        # Только для локальной разработки. В проде удалить.
         if settings.debug:
             response["debug_code"] = code
 
@@ -275,30 +310,21 @@ async def verify_email_code(
     )
 
     if not record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CHALLENGE_NOT_FOUND",
-                "message": "Login challenge not found",
-            },
+        raise NotFoundError(
+            code="CHALLENGE_NOT_FOUND",
+            message="Login challenge not found",
         )
 
     if record.consumed_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "CHALLENGE_ALREADY_USED",
-                "message": "Login challenge already used",
-            },
+        raise BadRequestError(
+            code="CHALLENGE_ALREADY_USED",
+            message="Login challenge already used",
         )
 
     if record.expires_at < _now():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "CHALLENGE_EXPIRED",
-                "message": "Login challenge expired",
-            },
+        raise BadRequestError(
+            code="CHALLENGE_EXPIRED",
+            message="Login challenge expired",
         )
 
     expected_hash = _hash_email_code(payload.login_challenge_id, payload.code)
@@ -306,22 +332,16 @@ async def verify_email_code(
         record.attempts += 1
         await session.commit()
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "INVALID_EMAIL_CODE",
-                "message": "Invalid verification code",
-            },
+        raise BadRequestError(
+            code="INVALID_EMAIL_CODE",
+            message="Invalid verification code",
         )
 
     user = await users_repo.get_by_id(session, record.user_id)
     if not user or user.is_deleted or user.pending_deletion:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "ACCOUNT_UNAVAILABLE",
-                "message": "Account unavailable",
-            },
+        raise ForbiddenError(
+            code="ACCOUNT_UNAVAILABLE",
+            message="Account unavailable",
         )
 
     record.consumed_at = _now()
@@ -349,42 +369,30 @@ async def refresh_access_token(
 ) -> dict:
     try:
         token_data = decode_token(payload.refresh_token)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_REFRESH_TOKEN",
-                "message": "Invalid refresh token",
-            },
-        )
+    except Exception as exc:
+        raise UnauthorizedError(
+            code="INVALID_REFRESH_TOKEN",
+            message="Invalid refresh token",
+        ) from exc
 
     if token_data.get("type") != "refresh":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_TOKEN_TYPE",
-                "message": "Token is not a refresh token",
-            },
+        raise UnauthorizedError(
+            code="INVALID_TOKEN_TYPE",
+            message="Token is not a refresh token",
         )
 
     user_id = token_data.get("sub")
     if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_REFRESH_TOKEN",
-                "message": "Invalid refresh token payload",
-            },
+        raise UnauthorizedError(
+            code="INVALID_REFRESH_TOKEN",
+            message="Invalid refresh token payload",
         )
 
     user = await users_repo.get_by_id(session, int(user_id))
     if not user or user.is_deleted or user.pending_deletion:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "ACCOUNT_UNAVAILABLE",
-                "message": "Account unavailable",
-            },
+        raise ForbiddenError(
+            code="ACCOUNT_UNAVAILABLE",
+            message="Account unavailable",
         )
 
     access_token = create_access_token(

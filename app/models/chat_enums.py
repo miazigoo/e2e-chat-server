@@ -45,3 +45,18 @@ class EventType(StrEnum):
     FILE_DELETED = "file_deleted"
     PARTICIPANT_KEY_CHANGED = "participant_key_changed"
     CONVERSATION_PURGED = "conversation_purged"
+
+
+class AttachmentStatus(StrEnum):
+    INIT = "init"
+    UPLOADED = "uploaded"
+    LINKED = "linked"
+    DELETED = "deleted"
+
+
+class UploadSessionStatus(StrEnum):
+    INIT = "init"
+    UPLOADING = "uploading"
+    COMPLETED = "completed"
+    EXPIRED = "expired"
+    ABORTED = "aborted"

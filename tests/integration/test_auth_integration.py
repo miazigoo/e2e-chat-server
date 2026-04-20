@@ -1,10 +1,10 @@
 from datetime import timedelta
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError, UnauthorizedError, BadRequestError, LockedError
 from app.core.security import hash_password
 from app.models.auth_email_code import AuthEmailCode
 from app.models.login_attempt import LoginAttempt
@@ -32,7 +32,7 @@ async def test_register_user_duplicate_nickname(session: AsyncSession) -> None:
     await create_user(session, nickname="@dup")
     await session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await register_user(
             session,
             RegisterRequest(
@@ -44,14 +44,15 @@ async def test_register_user_duplicate_nickname(session: AsyncSession) -> None:
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "NICKNAME_ALREADY_EXISTS"
+    assert exc.value.code == "NICKNAME_ALREADY_EXISTS"
+    assert exc.value.message == "Nickname already exists"
 
 
 async def test_register_user_duplicate_email(session: AsyncSession) -> None:
     await create_user(session, nickname="@u1", email="same@example.com")
     await session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         await register_user(
             session,
             RegisterRequest(
@@ -63,7 +64,8 @@ async def test_register_user_duplicate_email(session: AsyncSession) -> None:
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["code"] == "EMAIL_ALREADY_EXISTS"
+    assert exc.value.code == "EMAIL_ALREADY_EXISTS"
+    assert exc.value.message == "Email already exists"
 
 
 async def test_login_wrong_password_creates_failed_attempt(
@@ -76,14 +78,15 @@ async def test_login_wrong_password_creates_failed_attempt(
     )
     await session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(UnauthorizedError) as exc:
         await login_user(
             session,
             LoginRequest(nickname="@u1", password="wrong-password"),
         )
 
     assert exc.value.status_code == 401
-    assert exc.value.detail["code"] == "INVALID_CREDENTIALS"
+    assert exc.value.code == "INVALID_CREDENTIALS"
+    assert exc.value.message == "Invalid nickname or password"
 
     result = await session.execute(select(LoginAttempt))
     attempts = list(result.scalars().all())
@@ -102,25 +105,37 @@ async def test_login_locks_after_threshold(session: AsyncSession) -> None:
     await session.commit()
 
     for _ in range(4):
-        with pytest.raises(HTTPException):
+        with pytest.raises(UnauthorizedError) as exc:
             await login_user(
                 session,
                 LoginRequest(nickname="@u1", password="wrong-password"),
             )
 
-    with pytest.raises(HTTPException) as exc:
+        assert exc.value.status_code == 401
+        assert exc.value.code == "INVALID_CREDENTIALS"
+
+    with pytest.raises(LockedError) as exc:
         await login_user(
             session,
             LoginRequest(nickname="@u1", password="wrong-password"),
         )
 
     assert exc.value.status_code == 423
-    assert exc.value.detail["code"] == "ACCOUNT_LOCKED"
+    assert exc.value.code == "ACCOUNT_LOCKED"
 
     refreshed = await session.get(type(user), user.id)
     assert refreshed is not None
     assert refreshed.lock_until is not None
     assert refreshed.failed_login_stage == 1
+
+    with pytest.raises(LockedError) as exc:
+        await login_user(
+            session,
+            LoginRequest(nickname="@u1", password="wrong-password"),
+        )
+
+    assert exc.value.status_code == 423
+    assert exc.value.code == "ACCOUNT_LOCKED"
 
 
 async def test_login_success_with_email_2fa_creates_code(session: AsyncSession) -> None:
@@ -213,7 +228,7 @@ async def test_verify_email_code_reuse_fails(session: AsyncSession) -> None:
         ),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await verify_email_code(
             session,
             VerifyEmailCodeRequest(
@@ -223,7 +238,8 @@ async def test_verify_email_code_reuse_fails(session: AsyncSession) -> None:
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "CHALLENGE_ALREADY_USED"
+    assert exc.value.code == "CHALLENGE_ALREADY_USED"
+    assert exc.value.message == "Login challenge already used"
 
 
 async def test_verify_email_code_expired_fails(session: AsyncSession) -> None:
@@ -250,7 +266,7 @@ async def test_verify_email_code_expired_fails(session: AsyncSession) -> None:
     record.expires_at = record.expires_at - timedelta(hours=1)
     await session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(BadRequestError) as exc:
         await verify_email_code(
             session,
             VerifyEmailCodeRequest(
@@ -260,4 +276,5 @@ async def test_verify_email_code_expired_fails(session: AsyncSession) -> None:
         )
 
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "CHALLENGE_EXPIRED"
+    assert exc.value.code == "CHALLENGE_EXPIRED"
+    assert exc.value.message == "Login challenge expired"

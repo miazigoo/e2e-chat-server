@@ -22,8 +22,8 @@ class MessagesRepository:
         sender_device_id: int,
         recipient_user_id: int,
         recipient_device_id: int,
-        reply_to_message_id: int | None,
         message_uuid: str | None,
+        reply_to_message_id: int | None,
         message_type: MessageType,
         ciphertext: str,
         ciphertext_version: int,
@@ -145,6 +145,22 @@ class MessagesRepository:
                 MessageRecipientState.recipient_device_id == recipient_device_id,
             )
         )
+        return result.scalar_one_or_none()
+
+    async def get_by_message_uuid(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        sender_user_id: int,
+        message_uuid: str | None,
+    ) -> Message | None:
+        stmt = select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.sender_user_id == sender_user_id,
+            Message.message_uuid == message_uuid,
+        )
+        result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def mark_read(
