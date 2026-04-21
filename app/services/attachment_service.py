@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
-from app.core.storage import get_minio_client
+from app.core.storage import build_presigned_get_url
 from app.models.attachment import Attachment
 from app.models.user import User
 from app.repositories.files import FilesRepository
@@ -78,12 +78,10 @@ async def get_attachment_metadata(
     expires_in = None
 
     if can_download:
-        client = get_minio_client()
         expires_in = settings.presigned_download_expire_seconds
-        download_url = client.presigned_get_object(
+        download_url = await build_presigned_get_url(
             bucket_name=attachment.bucket_name,
             object_name=attachment.storage_key,
-            expires=expires_in,
         )
 
     return GetAttachmentResponseData(

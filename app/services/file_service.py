@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.storage import get_minio_client
+from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
+from app.core.storage import build_presigned_put_url, object_exists
 from app.models.chat_enums import UploadSessionStatus
+from app.models.conversation import Conversation
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
 from app.repositories.files import FilesRepository
@@ -31,22 +32,43 @@ def _session_expires_at() -> datetime:
     return _now() + timedelta(hours=1)
 
 
-def _temp_bucket_name() -> str:
-    return settings.minio_bucket_temp
+def _attachments_bucket_name() -> str:
+    return settings.minio_bucket_attachments
 
 
-def _build_presigned_put_url(
+def _ensure_conversation_upload_available(conversation: Conversation) -> None:
+    if conversation.is_purged:
+        raise GoneError(
+            code="CONVERSATION_PURGED",
+            message="Conversation is purged",
+        )
+
+    if not conversation.is_active:
+        raise ConflictError(
+            code="CONVERSATION_INACTIVE",
+            message="Conversation is inactive",
+        )
+
+
+async def _get_uploadable_conversation(
+    session: AsyncSession,
     *,
-    bucket_name: str,
-    storage_key: str,
-) -> str:
-    client = get_minio_client()
-    url = client.presigned_put_object(
-        bucket_name=bucket_name,
-        object_name=storage_key,
-        expires=timedelta(seconds=settings.presigned_upload_expire_seconds),
+    user_id: int,
+    conversation_id: int,
+) -> Conversation:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=user_id,
     )
-    return str(url)
+    if conversation is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _ensure_conversation_upload_available(conversation)
+    return conversation
 
 
 async def create_upload_session(
@@ -55,19 +77,11 @@ async def create_upload_session(
     current_user: User,
     payload: CreateUploadSessionRequest,
 ) -> CreateUploadSessionResponseData:
-    conversation = await conversations_repo.get_for_user(
+    conversation = await _get_uploadable_conversation(
         session,
-        conversation_id=payload.conversation_id,
         user_id=current_user.id,
+        conversation_id=payload.conversation_id,
     )
-    if conversation is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
-        )
 
     upload_session = await files_repo.create_upload_session(
         session,
@@ -82,7 +96,7 @@ async def create_upload_session(
     return CreateUploadSessionResponseData(
         session_id=upload_session.id,
         session_uuid=upload_session.session_uuid,
-        conversation_id=upload_session.conversation_id,
+        conversation_id=conversation.id,
         files_expected_count=upload_session.files_expected_count,
         files_uploaded_count=upload_session.files_uploaded_count,
         status=(
@@ -107,30 +121,27 @@ async def init_attachments(
         user_id=current_user.id,
     )
     if upload_session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "UPLOAD_SESSION_NOT_FOUND",
-                "message": "Upload session not found",
-            },
+        raise NotFoundError(
+            code="UPLOAD_SESSION_NOT_FOUND",
+            message="Upload session not found",
         )
 
+    await _get_uploadable_conversation(
+        session,
+        user_id=current_user.id,
+        conversation_id=upload_session.conversation_id,
+    )
+
     if upload_session.completed_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "UPLOAD_SESSION_ALREADY_COMPLETED",
-                "message": "Upload session already completed",
-            },
+        raise ConflictError(
+            code="UPLOAD_SESSION_ALREADY_COMPLETED",
+            message="Upload session already completed",
         )
 
     if upload_session.expires_at <= _now():
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail={
-                "code": "UPLOAD_SESSION_EXPIRED",
-                "message": "Upload session expired",
-            },
+        raise GoneError(
+            code="UPLOAD_SESSION_EXPIRED",
+            message="Upload session expired",
         )
 
     existing_attachments = await files_repo.list_attachments_for_session(
@@ -141,12 +152,9 @@ async def init_attachments(
         len(existing_attachments) + len(payload.items)
         > upload_session.files_expected_count
     ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "TOO_MANY_ATTACHMENTS",
-                "message": "Too many attachments for this upload session",
-            },
+        raise BadRequestError(
+            code="TOO_MANY_ATTACHMENTS",
+            message="Too many attachments for this upload session",
         )
 
     created_items: list[AttachmentInitItemSchema] = []
@@ -158,7 +166,7 @@ async def init_attachments(
         attachment = await files_repo.create_attachment(
             session,
             upload_session_id=upload_session.id,
-            bucket_name=_temp_bucket_name(),
+            bucket_name=_attachments_bucket_name(),
             storage_key=storage_key,
             encrypted_file_name=item.encrypted_file_name,
             encrypted_metadata=item.encrypted_metadata,
@@ -168,9 +176,9 @@ async def init_attachments(
             expires_at=upload_session.expires_at,
         )
 
-        upload_url = _build_presigned_put_url(
+        upload_url = await build_presigned_put_url(
             bucket_name=attachment.bucket_name,
-            storage_key=attachment.storage_key,
+            object_name=attachment.storage_key,
         )
 
         created_items.append(
@@ -215,46 +223,63 @@ async def complete_upload_session(
         user_id=current_user.id,
     )
     if upload_session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "UPLOAD_SESSION_NOT_FOUND",
-                "message": "Upload session not found",
-            },
+        raise NotFoundError(
+            code="UPLOAD_SESSION_NOT_FOUND",
+            message="Upload session not found",
         )
 
+    await _get_uploadable_conversation(
+        session,
+        user_id=current_user.id,
+        conversation_id=upload_session.conversation_id,
+    )
+
     if upload_session.completed_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "UPLOAD_SESSION_ALREADY_COMPLETED",
-                "message": "Upload session already completed",
-            },
+        raise ConflictError(
+            code="UPLOAD_SESSION_ALREADY_COMPLETED",
+            message="Upload session already completed",
         )
 
     if upload_session.expires_at <= _now():
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail={
-                "code": "UPLOAD_SESSION_EXPIRED",
-                "message": "Upload session expired",
-            },
+        raise GoneError(
+            code="UPLOAD_SESSION_EXPIRED",
+            message="Upload session expired",
         )
+
+    session_attachments = await files_repo.list_attachments_for_session(
+        session,
+        upload_session_id=upload_session.id,
+    )
+    attachment_by_id = {attachment.id: attachment for attachment in session_attachments}
+
+    if len(payload.attachment_ids) != len(set(payload.attachment_ids)):
+        raise BadRequestError(
+            code="DUPLICATE_ATTACHMENT_IDS",
+            message="attachment_ids must be unique",
+        )
+
+    for attachment_id in payload.attachment_ids:
+        attachment = attachment_by_id.get(attachment_id)
+        if attachment is None:
+            raise BadRequestError(
+                code="INVALID_ATTACHMENT_IDS",
+                message="One or more attachment ids are invalid for this session",
+            )
+        exists = await object_exists(
+            bucket_name=attachment.bucket_name,
+            object_name=attachment.storage_key,
+        )
+        if not exists:
+            raise BadRequestError(
+                code="UPLOAD_OBJECT_MISSING",
+                message="One or more uploaded objects are missing in storage",
+            )
 
     attachments = await files_repo.mark_attachments_uploaded(
         session,
         upload_session_id=upload_session.id,
         attachment_ids=payload.attachment_ids,
     )
-
-    if len(attachments) != len(payload.attachment_ids):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "INVALID_ATTACHMENT_IDS",
-                "message": "One or more attachment ids are invalid for this session",
-            },
-        )
 
     completed_at = _now()
     upload_session = await files_repo.complete_upload_session(

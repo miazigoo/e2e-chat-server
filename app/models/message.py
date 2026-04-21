@@ -22,6 +22,7 @@ class Message(Base):
     message_uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         nullable=False,
+        unique=True,
         server_default=text("gen_random_uuid()"),
     )
     conversation_id: Mapped[int] = mapped_column(

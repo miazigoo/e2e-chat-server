@@ -1,6 +1,6 @@
-from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
 from app.schemas.sync import ConversationEventItemSchema, ConversationEventsResponseData
@@ -22,15 +22,11 @@ async def get_conversation_events(
         user_id=current_user.id,
     )
     if participant is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "CONVERSATION_NOT_FOUND",
-                "message": "Conversation not found",
-            },
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
         )
 
-    # Берём limit + 1, чтобы понять, есть ли следующая страница.
     raw_events = await conversations_repo.list_events_for_user(
         session,
         conversation_id=conversation_id,

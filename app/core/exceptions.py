@@ -163,3 +163,19 @@ class TooManyRequestsError(AppError):
             status_code=429,
             details=details,
         )
+
+
+class ServiceUnavailableError(AppError):
+    def __init__(
+        self,
+        message: str = "Service temporarily unavailable.",
+        *,
+        code: str = "SERVICE_UNAVAILABLE",
+        details: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            code=code,
+            message=message,
+            status_code=503,
+            details=details,
+        )

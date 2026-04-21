@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 import firebase_admin
 from firebase_admin import credentials, messaging
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_firebase_initialized() -> bool:
@@ -21,27 +24,27 @@ def _ensure_firebase_initialized() -> bool:
     return True
 
 
-def send_push_data_message(
-    *,
-    token: str,
-    data: dict[str, str],
-) -> str | None:
+def send_push_data_message(*, token: str, data: dict[str, str]) -> str | None:
     if not token:
         return None
 
-    if not _ensure_firebase_initialized():
-        return None
+    try:
+        if not _ensure_firebase_initialized():
+            return None
 
-    message = messaging.Message(
-        token=token,
-        data=data,
-        android=messaging.AndroidConfig(
-            priority="high",
-            ttl=timedelta(seconds=settings.fcm_notification_ttl_seconds),
-        ),
-    )
-    result = messaging.send(message)
-    return str(result) if result is not None else None
+        message = messaging.Message(
+            token=token,
+            data=data,
+            android=messaging.AndroidConfig(
+                priority="high",
+                ttl=timedelta(seconds=settings.fcm_notification_ttl_seconds),
+            ),
+        )
+        result = messaging.send(message)
+        return str(result) if result is not None else None
+    except Exception:
+        logger.exception("FCM push send failed")
+        return None
 
 
 def build_new_message_push_payload(

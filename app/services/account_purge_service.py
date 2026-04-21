@@ -81,10 +81,7 @@ async def purge_account(
                     actor_device_id=None,
                     event_type=EventType.CONVERSATION_PURGED,
                     target_message_id=None,
-                    payload={
-                        "reason": reason,
-                        "purged_user_id": user_id,
-                    },
+                    payload={"message": "Conversation unavailable"},
                 )
             )
 

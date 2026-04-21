@@ -19,4 +19,5 @@ COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     423: {"model": ApiErrorResponse, "description": "Resource is locked."},
     429: {"model": ApiErrorResponse, "description": "Too many requests."},
     500: {"model": ApiErrorResponse, "description": "Internal server error."},
+    503: {"model": ApiErrorResponse, "description": "Service temporarily unavailable."},
 }

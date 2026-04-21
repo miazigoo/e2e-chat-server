@@ -152,3 +152,7 @@ async def create_message(
     session.add(message)
     await session.flush()
     return message
+
+
+def new_message_uuid() -> str:
+    return str(uuid4())

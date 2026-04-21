@@ -13,3 +13,26 @@ class RefillPreKeysRequest(BaseModel):
 class RotateSignedPreKeyRequest(BaseModel):
     signed_prekey: str = Field(min_length=1)
     signed_prekey_signature: str = Field(min_length=1)
+
+
+class KeyBundleResponseData(BaseModel):
+    user_id: int
+    device_id: int
+    requested_by_device_id: int
+    public_identity_key: str
+    public_signing_key: str
+    signed_prekey: str
+    signed_prekey_signature: str
+    one_time_prekey: OneTimePreKeySchema | None = None
+    prekeys_remaining: int
+
+
+class RefillPreKeysResponseData(BaseModel):
+    device_id: int
+    added: int
+    prekeys_count: int
+
+
+class RotateSignedPreKeyResponseData(BaseModel):
+    device_id: int
+    rotated: bool

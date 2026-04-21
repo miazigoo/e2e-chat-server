@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Integer, Text, func, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,7 @@ class UploadSession(Base):
     session_uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         nullable=False,
+        unique=True,
         server_default=text("gen_random_uuid()"),
     )
 
@@ -60,6 +61,12 @@ class UploadSession(Base):
         nullable=True,
     )
 
+    __table_args__ = (
+        Index("ix_upload_sessions_user_id", "user_id"),
+        Index("ix_upload_sessions_conversation_id", "conversation_id"),
+        Index("ix_upload_sessions_expires_at", "expires_at"),
+    )
+
 
 class Attachment(Base):
     __tablename__ = "attachments"
@@ -68,6 +75,7 @@ class Attachment(Base):
     attachment_uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         nullable=False,
+        unique=True,
         server_default=text("gen_random_uuid()"),
     )
 
@@ -114,4 +122,10 @@ class Attachment(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    __table_args__ = (
+        Index("ix_attachments_message_id", "message_id"),
+        Index("ix_attachments_upload_session_id", "upload_session_id"),
+        Index("ix_attachments_expires_at", "expires_at"),
     )

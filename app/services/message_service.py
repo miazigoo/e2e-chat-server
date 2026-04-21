@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_log
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
-from app.models.chat_enums import EventType, VisibilityReason
+from app.models.chat_enums import (
+    EncryptionMode,
+    EventType,
+    MessageType,
+    ProtectionMode,
+    VisibilityReason,
+)
 from app.models.device import Device
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
@@ -14,6 +20,7 @@ from app.repositories.files import FilesRepository
 from app.repositories.messages import MessagesRepository
 from app.schemas.messages import (
     DeleteMessagesRequest,
+    MarkDeliveredRequest,
     MarkReadRequest,
     SendMessageRequest,
 )
@@ -101,6 +108,58 @@ def _event_to_realtime_payload(
     }
 
 
+def _ensure_conversation_mutable(*, is_purged: bool, is_active: bool) -> None:
+    if is_purged:
+        raise GoneError(
+            code="CONVERSATION_PURGED",
+            message="Conversation is purged",
+        )
+
+    if not is_active:
+        raise ConflictError(
+            code="CONVERSATION_INACTIVE",
+            message="Conversation is inactive",
+        )
+
+
+def _validate_client_message_payload(payload: SendMessageRequest) -> None:
+    if payload.message_type == MessageType.SERVICE:
+        raise BadRequestError(
+            code="CLIENT_MESSAGE_TYPE_NOT_ALLOWED",
+            message="Clients cannot send service messages",
+        )
+
+    if payload.message_type == MessageType.FILE and not payload.attachment_ids:
+        raise BadRequestError(
+            code="FILE_MESSAGE_REQUIRES_ATTACHMENTS",
+            message="File messages must include attachment_ids",
+        )
+
+
+def _validate_encryption_mode_for_conversation(
+    *,
+    protection_mode: ProtectionMode,
+    encryption_mode: EncryptionMode,
+) -> None:
+    if (
+        protection_mode == ProtectionMode.NORMAL
+        and encryption_mode != EncryptionMode.SIGNAL
+    ):
+        raise BadRequestError(
+            code="INVALID_ENCRYPTION_MODE",
+            message="Normal conversation requires signal encryption mode",
+        )
+
+    if (
+        protection_mode == ProtectionMode.SHARED_SECRET
+        and encryption_mode != EncryptionMode.SIGNAL_PLUS_SHARED_SECRET
+    ):
+        raise BadRequestError(
+            code="INVALID_ENCRYPTION_MODE",
+            message="Shared secret conversation requires signal_plus_shared_secret encryption mode",
+        )
+
+
 async def send_message(
     session: AsyncSession,
     *,
@@ -119,11 +178,15 @@ async def send_message(
             message="Conversation not found",
         )
 
-    if conversation.is_purged:
-        raise GoneError(
-            code="CONVERSATION_PURGED",
-            message="Conversation is purged",
-        )
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+    _validate_client_message_payload(payload)
+    _validate_encryption_mode_for_conversation(
+        protection_mode=conversation.protection_mode,
+        encryption_mode=payload.encryption_mode,
+    )
 
     expected_recipient_id = _other_participant_id(
         conversation.user_a_id,
@@ -173,6 +236,13 @@ async def send_message(
             )
 
     now_dt = _now()
+
+    if payload.client_created_at > now_dt + timedelta(minutes=5):
+        raise BadRequestError(
+            code="INVALID_CLIENT_CREATED_AT",
+            message="client_created_at is too far in the future",
+        )
+
     expires_at = _resolve_expires_at(
         explicit_expires_at=payload.expires_at,
         conversation_ttl_days=conversation.message_ttl_days,
@@ -198,15 +268,11 @@ async def send_message(
         else conversation.delete_after_read_seconds
     )
 
-    existing_message = (
-        await messages_repo.get_by_message_uuid(
-            session,
-            conversation_id=conversation.id,
-            sender_user_id=current_user.id,
-            message_uuid=payload.message_uuid,
-        )
-        if payload.message_uuid
-        else None
+    existing_message = await messages_repo.get_by_message_uuid(
+        session,
+        conversation_id=conversation.id,
+        sender_user_id=current_user.id,
+        message_uuid=payload.message_uuid,
     )
 
     if existing_message is not None:
@@ -377,10 +443,11 @@ async def list_messages(
                 "encryption_mode": message.encryption_mode.value,
                 "nonce": message.nonce,
                 "aad_hash": message.aad_hash,
-                "client_created_at": message.client_created_at.isoformat(),
-                "server_received_at": message.server_received_at.isoformat(),
-                "read_at": message.read_at.isoformat() if message.read_at else None,
-                "expires_at": message.expires_at.isoformat(),
+                "client_created_at": message.client_created_at,
+                "server_received_at": message.server_received_at,
+                "delivered_at": message.delivered_at,
+                "read_at": message.read_at,
+                "expires_at": message.expires_at,
                 "has_attachments": message.has_attachments,
             }
         )
@@ -409,6 +476,9 @@ async def mark_read(
         )
 
     read_at = payload.read_at or _now()
+    if read_at > _now() + timedelta(seconds=30):
+        read_at = _now()
+
     state = await messages_repo.get_recipient_state(
         session,
         message_id=message.id,
@@ -484,7 +554,7 @@ async def mark_read(
     return {
         "message_id": message.id,
         "status": "read",
-        "read_at": read_at.isoformat(),
+        "read_at": read_at,
     }
 
 
@@ -505,6 +575,11 @@ async def delete_local(
             message="Conversation not found",
         )
 
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
     hidden_ids = await messages_repo.hide_messages_for_user(
         session,
         conversation_id=payload.conversation_id,
@@ -512,6 +587,13 @@ async def delete_local(
         message_ids=payload.message_ids,
         reason=VisibilityReason.USER_DELETED,
     )
+
+    if not hidden_ids:
+        return {
+            "deleted": False,
+            "scope": "local",
+            "message_ids": [],
+        }
 
     event = await conversations_repo.create_event(
         session,
@@ -577,6 +659,11 @@ async def delete_global(
             message="Conversation not found",
         )
 
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
     deleted_messages = await messages_repo.delete_global_messages(
         session,
         conversation_id=payload.conversation_id,
@@ -586,13 +673,34 @@ async def delete_global(
     )
     deleted_ids = [message.id for message in deleted_messages]
 
+    if not deleted_ids:
+        return {
+            "deleted": False,
+            "scope": "global",
+            "message_ids": [],
+        }
+
+    attachments = await files_repo.list_by_message_ids(
+        session,
+        message_ids=deleted_ids,
+    )
+    deleted_attachment_ids = await files_repo.mark_attachments_deleted(
+        session,
+        attachments=attachments,
+        deleted_at=_now(),
+    )
+
     event = await conversations_repo.create_event(
         session,
         conversation_id=payload.conversation_id,
         actor_user_id=current_user.id,
         actor_device_id=None,
         event_type=EventType.MESSAGE_DELETED_GLOBAL,
-        payload={"message_ids": deleted_ids, "scope": "global"},
+        payload={
+            "message_ids": deleted_ids,
+            "attachment_ids": deleted_attachment_ids,
+            "scope": "global",
+        },
     )
 
     await conversations_repo.touch_conversation(
@@ -603,13 +711,23 @@ async def delete_global(
 
     await session.commit()
 
+    peer_user_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+
     audit_log(
         "message_deleted_global",
         user_id=current_user.id,
         conversation_id=payload.conversation_id,
-        extra={"message_ids": deleted_ids},
+        extra={
+            "message_ids": deleted_ids,
+            "attachment_ids": deleted_attachment_ids,
+        },
     )
     _enqueue_recompute_unread(current_user.id)
+    _enqueue_recompute_unread(peer_user_id)
 
     realtime_payload = _event_to_realtime_payload(
         conversation_id=payload.conversation_id,
@@ -625,9 +743,101 @@ async def delete_global(
     await realtime_hub.publish_conversation_event(
         payload.conversation_id, realtime_payload
     )
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {
         "deleted": True,
         "scope": "global",
         "message_ids": deleted_ids,
+    }
+
+
+async def mark_delivered(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    message_id: int,
+    payload: MarkDeliveredRequest,
+) -> dict:
+    message = await messages_repo.get_message_for_recipient(
+        session,
+        message_id=message_id,
+        user_id=current_user.id,
+        recipient_device_id=current_device.id,
+    )
+    if not message:
+        raise NotFoundError(
+            code="MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
+
+    delivered_at = payload.delivered_at or _now()
+    if delivered_at > _now() + timedelta(seconds=30):
+        delivered_at = _now()
+
+    state = await messages_repo.get_recipient_state(
+        session,
+        message_id=message.id,
+        recipient_device_id=current_device.id,
+    )
+    await messages_repo.mark_delivered(
+        session,
+        message=message,
+        state=state,
+        delivered_at=delivered_at,
+    )
+
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=message.conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=current_device.id,
+        event_type=EventType.MESSAGE_DELIVERED,
+        target_message_id=message.id,
+        payload={"message_id": message.id, "delivered_at": delivered_at.isoformat()},
+    )
+
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=message.conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is not None:
+        await conversations_repo.touch_conversation(
+            session,
+            conversation=conversation,
+            touched_at=delivered_at,
+        )
+
+    await session.commit()
+
+    audit_log(
+        "message_delivered",
+        user_id=current_user.id,
+        device_id=current_device.id,
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+    )
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=message.conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(
+        message.conversation_id, realtime_payload
+    )
+    await realtime_hub.publish_user_event(message.sender_user_id, realtime_payload)
+
+    return {
+        "message_id": message.id,
+        "status": "delivered",
+        "delivered_at": delivered_at,
     }

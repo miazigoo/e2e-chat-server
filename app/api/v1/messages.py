@@ -11,6 +11,8 @@ from app.schemas.messages import (
     DeleteMessagesRequest,
     DeleteMessagesResponseData,
     ListMessagesResponseData,
+    MarkDeliveredRequest,
+    MarkDeliveredResponseData,
     MarkReadRequest,
     MarkReadResponseData,
     SendMessageRequest,
@@ -20,6 +22,7 @@ from app.services.message_service import (
     delete_global,
     delete_local,
     list_messages,
+    mark_delivered,
     mark_read,
     send_message,
 )
@@ -65,6 +68,27 @@ async def send_message_endpoint(
         payload=payload,
     )
     return ApiResponse(data=SendMessageResponseData(**result))
+
+
+@router.post(
+    "/{message_id}/delivered",
+    response_model=ApiResponse[MarkDeliveredResponseData],
+)
+async def mark_delivered_endpoint(
+    message_id: int,
+    payload: MarkDeliveredRequest,
+    current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[MarkDeliveredResponseData]:
+    result = await mark_delivered(
+        session,
+        current_user=current_user,
+        current_device=current_device,
+        message_id=message_id,
+        payload=payload,
+    )
+    return ApiResponse(data=MarkDeliveredResponseData(**result))
 
 
 @router.post(

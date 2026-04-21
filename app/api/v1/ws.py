@@ -6,7 +6,8 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.db import AsyncSessionLocal
-from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.core.exceptions import ForbiddenError, TooManyRequestsError, UnauthorizedError
+from app.core.rate_limit import rate_limiter
 from app.core.realtime import realtime_hub
 from app.dependencies.auth import resolve_access_session
 from app.repositories.conversations import ConversationsRepository
@@ -71,19 +72,26 @@ class WebSocketManager:
             if not self._conversation_connections[conversation_id]:
                 self._conversation_connections.pop(conversation_id, None)
 
+    async def _safe_send(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            self.disconnect(websocket)
+
     async def send_personal(self, user_id: int, payload: dict[str, Any]) -> None:
         for websocket in list(self._user_connections.get(user_id, set())):
-            await websocket.send_json(payload)
+            await self._safe_send(websocket, payload)
 
     async def send_conversation(
-        self,
-        conversation_id: int,
-        payload: dict[str, Any],
+        self, conversation_id: int, payload: dict[str, Any]
     ) -> None:
         for websocket in list(
             self._conversation_connections.get(conversation_id, set())
         ):
-            await websocket.send_json(payload)
+            await self._safe_send(websocket, payload)
+
+    def user_connection_count(self, user_id: int) -> int:
+        return len(self._user_connections.get(user_id, set()))
 
 
 manager = WebSocketManager()
@@ -122,6 +130,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     device_uuid = websocket.headers.get("X-Device-UUID") or websocket.query_params.get(
         "device_uuid"
     )
+
+    ip_address = websocket.client.host if websocket.client else "unknown"
+    try:
+        await rate_limiter.hit(
+            key=f"rl:ws:connect:{ip_address}",
+            limit=30,
+            window_seconds=60,
+        )
+    except TooManyRequestsError:
+        await websocket.close(
+            code=4429, reason="Too many websocket connection attempts"
+        )
+        return
 
     if not token:
         await _close_unauthorized(websocket, 4401, "Access token is required")
@@ -279,7 +300,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             pass
     finally:
         meta = manager.disconnect(websocket) or connected_meta
-        if meta is not None:
+        if meta is not None and manager.user_connection_count(meta["user_id"]) == 0:
             await realtime_hub.mark_offline(
                 user_id=meta["user_id"],
                 device_id=meta["device_id"],

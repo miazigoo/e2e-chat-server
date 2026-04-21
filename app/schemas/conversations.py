@@ -23,6 +23,39 @@ class ClearConversationRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=255)
 
 
+class CreateConversationResponseData(BaseModel):
+    conversation_id: int
+    conversation_uuid: str
+    recipient_user_id: int
+    protection_mode: str
+
+
+class GetConversationResponseData(BaseModel):
+    conversation_id: int
+    conversation_uuid: str
+    title: str | None = None
+    peer_user_id: int
+    protection_mode: str
+    message_ttl_days: int | None = None
+    delete_after_read_seconds: int | None = None
+    is_active: bool
+    is_purged: bool
+
+
+class UpdateConversationResponseData(BaseModel):
+    conversation_id: int
+    updated: bool
+
+
+class ClearConversationResponseData(BaseModel):
+    conversation_id: int
+    scope: str
+    cleared: bool
+    cleared_at: str | None = None
+    deleted_messages_count: int | None = None
+    deleted_attachment_ids: list[int] = Field(default_factory=list)
+
+
 class ConversationPeerSchema(BaseModel):
     user_id: int
     nickname: str | None = None

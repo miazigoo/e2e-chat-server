@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -100,6 +101,10 @@ def _bootstrap_response(*, user_id: int, nickname: str) -> dict:
     }
 
 
+def _email_code_exhausted(*, attempts: int) -> bool:
+    return attempts >= settings.email_code_max_attempts
+
+
 async def _issue_session_tokens(
     session: AsyncSession,
     *,
@@ -192,6 +197,12 @@ async def _resolve_device_for_auth(
 
 
 async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict:
+    if payload.email_2fa_enabled and not payload.email:
+        raise BadRequestError(
+            code="EMAIL_REQUIRED_FOR_2FA",
+            message="Email is required when email 2FA is enabled",
+        )
+
     existing_user = await users_repo.get_by_nickname(session, payload.nickname)
     if existing_user:
         raise ConflictError(
@@ -324,8 +335,18 @@ async def login_user(
 
     user.lock_until = None
     user.failed_login_stage = 0
+    if user.email_2fa_enabled and not user.email:
+        raise ForbiddenError(
+            code="ACCOUNT_2FA_MISCONFIGURED",
+            message="Account 2FA is misconfigured",
+        )
 
     if user.email_2fa_enabled and user.email:
+        await auth_repo.invalidate_active_email_codes(
+            session,
+            user_id=user.id,
+        )
+
         login_challenge_id = str(uuid4())
         code = _generate_email_code()
         code_hash = _hash_email_code(login_challenge_id, code)
@@ -407,6 +428,11 @@ async def verify_email_code(
         )
 
     if record.consumed_at is not None:
+        if _email_code_exhausted(attempts=record.attempts):
+            raise LockedError(
+                code="EMAIL_CODE_ATTEMPTS_EXCEEDED",
+                message="Too many verification attempts for this challenge",
+            )
         raise BadRequestError(
             code="CHALLENGE_ALREADY_USED",
             message="Login challenge already used",
@@ -418,9 +444,26 @@ async def verify_email_code(
             message="Login challenge expired",
         )
 
+    if _email_code_exhausted(attempts=record.attempts):
+        record.consumed_at = _now()
+        await session.commit()
+        raise LockedError(
+            code="EMAIL_CODE_ATTEMPTS_EXCEEDED",
+            message="Too many verification attempts for this challenge",
+        )
+
     expected_hash = _hash_email_code(payload.login_challenge_id, payload.code)
-    if expected_hash != record.code_hash:
+    if not hmac.compare_digest(expected_hash, record.code_hash):
         record.attempts += 1
+
+        if _email_code_exhausted(attempts=record.attempts):
+            record.consumed_at = _now()
+            await session.commit()
+            raise LockedError(
+                code="EMAIL_CODE_ATTEMPTS_EXCEEDED",
+                message="Too many verification attempts for this challenge",
+            )
+
         await session.commit()
 
         raise BadRequestError(

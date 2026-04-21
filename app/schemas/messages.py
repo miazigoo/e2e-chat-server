@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.chat_enums import EncryptionMode, MessageType
 
@@ -9,7 +10,7 @@ class SendMessageRequest(BaseModel):
     conversation_id: int
     recipient_user_id: int
 
-    message_uuid: str | None = None
+    message_uuid: str = Field(min_length=36, max_length=64)
     reply_to_message_id: int | None = None
 
     message_type: MessageType = MessageType.TEXT
@@ -25,6 +26,25 @@ class SendMessageRequest(BaseModel):
 
     attachment_ids: list[int] = Field(default_factory=list, max_length=20)
 
+    @field_validator("message_uuid")
+    @classmethod
+    def validate_message_uuid(cls, value: str) -> str:
+        try:
+            return str(UUID(value))
+        except ValueError as exc:
+            raise ValueError("message_uuid must be a valid UUID") from exc
+
+    @field_validator("attachment_ids")
+    @classmethod
+    def validate_attachment_ids_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("attachment_ids must be unique")
+        return value
+
+
+class MarkDeliveredRequest(BaseModel):
+    delivered_at: datetime | None = None
+
 
 class MarkReadRequest(BaseModel):
     read_at: datetime | None = None
@@ -33,6 +53,13 @@ class MarkReadRequest(BaseModel):
 class DeleteMessagesRequest(BaseModel):
     conversation_id: int
     message_ids: list[int] = Field(min_length=1, max_length=200)
+
+    @field_validator("message_ids")
+    @classmethod
+    def validate_message_ids_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("message_ids must be unique")
+        return value
 
 
 class SendMessageResponseData(BaseModel):
@@ -57,10 +84,11 @@ class MessageListItemSchema(BaseModel):
     encryption_mode: EncryptionMode
     nonce: str
     aad_hash: str | None = None
-    client_created_at: str
-    server_received_at: str
-    read_at: str | None = None
-    expires_at: str
+    client_created_at: datetime
+    server_received_at: datetime
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+    expires_at: datetime
     has_attachments: bool
 
 
@@ -68,10 +96,16 @@ class ListMessagesResponseData(BaseModel):
     items: list[MessageListItemSchema] = Field(default_factory=list)
 
 
+class MarkDeliveredResponseData(BaseModel):
+    message_id: int
+    status: str
+    delivered_at: datetime
+
+
 class MarkReadResponseData(BaseModel):
     message_id: int
     status: str
-    read_at: str
+    read_at: datetime
 
 
 class DeleteMessagesResponseData(BaseModel):

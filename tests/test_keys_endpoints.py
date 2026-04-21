@@ -11,11 +11,23 @@ from app.main import app
 
 
 async def override_current_user() -> Any:
-    return SimpleNamespace(id=1, is_deleted=False, pending_deletion=False)
+    return SimpleNamespace(
+        id=1,
+        is_deleted=False,
+        pending_deletion=False,
+        is_active=True,
+        is_frozen=False,
+    )
 
 
 async def override_current_device() -> Any:
-    return SimpleNamespace(id=10, user_id=1, device_uuid="device-uuid-1")
+    return SimpleNamespace(
+        id=10,
+        user_id=1,
+        device_uuid="device-uuid-1",
+        is_active=True,
+        revoked_at=None,
+    )
 
 
 def test_get_key_bundle_success(

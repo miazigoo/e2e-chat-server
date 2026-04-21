@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime
+from sqlalchemy import CheckConstraint, DateTime
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -18,6 +18,7 @@ class Conversation(Base):
     conversation_uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         nullable=False,
+        unique=True,
         server_default=text("gen_random_uuid()"),
     )
 
@@ -51,8 +52,8 @@ class Conversation(Base):
         Integer, nullable=True
     )
 
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    is_purged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
+    is_purged: Mapped[bool] = mapped_column(nullable=False, default=False)
     purged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -74,6 +75,7 @@ class Conversation(Base):
         ),
         Index("ix_conversations_user_a", "user_a_id"),
         Index("ix_conversations_user_b", "user_b_id"),
+        Index("ix_conversations_pair", "user_a_id", "user_b_id"),
         Index("ix_conversations_updated_at", "updated_at"),
     )
 
@@ -123,6 +125,7 @@ class ConversationEvent(Base):
     event_uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         nullable=False,
+        unique=True,
         server_default=text("gen_random_uuid()"),
     )
     conversation_id: Mapped[int] = mapped_column(

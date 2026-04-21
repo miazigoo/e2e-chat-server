@@ -190,8 +190,11 @@ class RealtimeHub:
             async with self._redis.pipeline(transaction=False) as pipe:
                 pipe.delete(f"presence:user:{user_id}")
                 pipe.delete(f"presence:device:{device_id}")
+                pipe.srem("presence:active_users", user_id)
                 pipe.set(
-                    f"presence:last_seen:{user_id}", _now_iso(), ex=60 * 60 * 24 * 7
+                    f"presence:last_seen:{user_id}",
+                    _now_iso(),
+                    ex=60 * 60 * 24 * 7,
                 )
                 await pipe.execute()
         except Exception:

@@ -40,6 +40,9 @@ def test_register_validation_error(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_login_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

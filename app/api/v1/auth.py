@@ -26,7 +26,7 @@ from app.schemas.auth import (
     VerifyEmailCodeResponseData,
 )
 from app.schemas.common import ApiErrorResponse, ApiResponse
-from app.schemas.devices import BootstrapDeviceRequest
+from app.schemas.devices import BootstrapDeviceRequest, BootstrapDeviceResponseData
 from app.services.auth_service import (
     login_user,
     logout_all_sessions,
@@ -178,6 +178,7 @@ async def refresh_token(
 
 @router.post(
     "/bootstrap",
+    response_model=ApiResponse[BootstrapDeviceResponseData],
     summary="Register or update device bootstrap data",
     description=(
         "Register device keys, signed prekey and one-time prekeys. "
@@ -198,17 +199,13 @@ async def bootstrap(
     payload: BootstrapDeviceRequest,
     bootstrap_user: User = Depends(get_bootstrap_user),
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> ApiResponse[BootstrapDeviceResponseData]:
     data = await bootstrap_device(
         session,
         current_user=bootstrap_user,
         payload=payload,
     )
-    return {
-        "ok": True,
-        "data": data,
-        "meta": {},
-    }
+    return ApiResponse(data=BootstrapDeviceResponseData(**data))
 
 
 @router.post(

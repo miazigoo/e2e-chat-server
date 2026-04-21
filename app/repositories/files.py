@@ -220,3 +220,37 @@ class FilesRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_by_message_ids(
+        self,
+        session: AsyncSession,
+        *,
+        message_ids: list[int],
+    ) -> list[Attachment]:
+        if not message_ids:
+            return []
+
+        result = await session.execute(
+            select(Attachment).where(
+                Attachment.message_id.in_(message_ids),
+                Attachment.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def mark_attachments_deleted(
+        self,
+        session: AsyncSession,
+        *,
+        attachments: list[Attachment],
+        deleted_at: datetime,
+    ) -> list[int]:
+        ids: list[int] = []
+        for attachment in attachments:
+            if attachment.deleted_at is None:
+                attachment.deleted_at = deleted_at
+                attachment.upload_status = AttachmentStatus.DELETED
+                ids.append(attachment.id)
+
+        await session.flush()
+        return ids

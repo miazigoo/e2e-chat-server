@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 
 import app.services.auth_service as auth_service
+from app.core.config import settings
 from app.core.exceptions import (
     BadRequestError,
     ConflictError,
@@ -380,6 +381,15 @@ async def test_login_success_with_2fa_returns_challenge(
     async def fake_commit() -> None:
         return None
 
+    async def fake_invalidate_active_email_codes(session: Any, user_id: int) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "invalidate_active_email_codes",
+        fake_invalidate_active_email_codes,
+    )
+
     monkeypatch.setattr(
         auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
     )
@@ -522,3 +532,110 @@ async def test_refresh_access_token_wrong_type(
 
     assert exc.value.status_code == 401
     assert exc.value.code == "INVALID_TOKEN_TYPE"
+
+
+@pytest.mark.asyncio
+async def test_register_user_requires_email_for_2fa() -> None:
+    session = cast(Any, SimpleNamespace())
+
+    with pytest.raises(BadRequestError) as exc:
+        await auth_service.register_user(
+            session,
+            RegisterRequest(
+                nickname="@tester",
+                password="supersecret123",
+                email=None,
+                email_2fa_enabled=True,
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.code == "EMAIL_REQUIRED_FOR_2FA"
+
+
+@pytest.mark.asyncio
+async def test_verify_email_code_locks_after_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = SimpleNamespace(
+        user_id=1,
+        consumed_at=None,
+        expires_at=_now() + timedelta(minutes=10),
+        code_hash="expected-hash",
+        attempts=settings.email_code_max_attempts - 1,
+    )
+
+    async def fake_get_email_code_by_challenge(
+        session: Any,
+        login_challenge_id: str,
+    ) -> Any:
+        return record
+
+    async def fake_commit() -> None:
+        return None
+
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "get_email_code_by_challenge",
+        fake_get_email_code_by_challenge,
+    )
+    monkeypatch.setattr(
+        auth_service,
+        "_hash_email_code",
+        lambda login_challenge_id, code: "wrong-hash",
+    )
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    with pytest.raises(LockedError) as exc:
+        await auth_service.verify_email_code(
+            session,
+            VerifyEmailCodeRequest(
+                login_challenge_id="challenge-id",
+                code="000000",
+            ),
+        )
+
+    assert exc.value.status_code == 423
+    assert exc.value.code == "EMAIL_CODE_ATTEMPTS_EXCEEDED"
+    assert record.attempts == settings.email_code_max_attempts
+    assert record.consumed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_verify_email_code_exhausted_challenge_stays_locked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = SimpleNamespace(
+        user_id=1,
+        consumed_at=_now(),
+        expires_at=_now() + timedelta(minutes=10),
+        code_hash="expected-hash",
+        attempts=settings.email_code_max_attempts,
+    )
+
+    async def fake_get_email_code_by_challenge(
+        session: Any,
+        login_challenge_id: str,
+    ) -> Any:
+        return record
+
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "get_email_code_by_challenge",
+        fake_get_email_code_by_challenge,
+    )
+
+    session = cast(Any, SimpleNamespace())
+
+    with pytest.raises(LockedError) as exc:
+        await auth_service.verify_email_code(
+            session,
+            VerifyEmailCodeRequest(
+                login_challenge_id="challenge-id",
+                code="123456",
+            ),
+        )
+
+    assert exc.value.status_code == 423
+    assert exc.value.code == "EMAIL_CODE_ATTEMPTS_EXCEEDED"

@@ -22,7 +22,7 @@ class MessagesRepository:
         sender_device_id: int,
         recipient_user_id: int,
         recipient_device_id: int,
-        message_uuid: str | None,
+        message_uuid: str,
         reply_to_message_id: int | None,
         message_type: MessageType,
         ciphertext: str,
@@ -35,29 +35,25 @@ class MessagesRepository:
         auto_delete_after_read_seconds: int | None,
         has_attachments: bool,
     ) -> Message:
-        message_kwargs = {
-            "conversation_id": conversation_id,
-            "sender_user_id": sender_user_id,
-            "sender_device_id": sender_device_id,
-            "recipient_user_id": recipient_user_id,
-            "recipient_device_id": recipient_device_id,
-            "reply_to_message_id": reply_to_message_id,
-            "message_type": message_type,
-            "ciphertext": ciphertext,
-            "ciphertext_version": ciphertext_version,
-            "encryption_mode": encryption_mode,
-            "nonce": nonce,
-            "aad_hash": aad_hash,
-            "client_created_at": client_created_at,
-            "expires_at": expires_at,
-            "auto_delete_after_read_seconds": auto_delete_after_read_seconds,
-            "has_attachments": has_attachments,
-        }
-
-        if message_uuid is not None:
-            message_kwargs["message_uuid"] = message_uuid
-
-        message = Message(**message_kwargs)
+        message = Message(
+            conversation_id=conversation_id,
+            sender_user_id=sender_user_id,
+            sender_device_id=sender_device_id,
+            recipient_user_id=recipient_user_id,
+            recipient_device_id=recipient_device_id,
+            message_uuid=message_uuid,
+            reply_to_message_id=reply_to_message_id,
+            message_type=message_type,
+            ciphertext=ciphertext,
+            ciphertext_version=ciphertext_version,
+            encryption_mode=encryption_mode,
+            nonce=nonce,
+            aad_hash=aad_hash,
+            client_created_at=client_created_at,
+            expires_at=expires_at,
+            auto_delete_after_read_seconds=auto_delete_after_read_seconds,
+            has_attachments=has_attachments,
+        )
         session.add(message)
         await session.flush()
         return message
@@ -153,7 +149,7 @@ class MessagesRepository:
         *,
         conversation_id: int,
         sender_user_id: int,
-        message_uuid: str | None,
+        message_uuid: str,
     ) -> Message | None:
         stmt = select(Message).where(
             Message.conversation_id == conversation_id,
@@ -286,3 +282,20 @@ class MessagesRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def mark_delivered(
+        self,
+        session: AsyncSession,
+        *,
+        message: Message,
+        state: MessageRecipientState | None,
+        delivered_at: datetime,
+    ) -> None:
+        if message.delivered_at is None:
+            message.delivered_at = delivered_at
+
+        if state is not None:
+            state.delivered_at = delivered_at
+            state.delivery_status = DeliveryStatus.DELIVERED
+
+        await session.flush()

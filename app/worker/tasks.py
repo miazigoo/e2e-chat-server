@@ -3,9 +3,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 
+from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.core.push import build_new_message_push_payload, send_push_data_message
 from app.core.realtime import realtime_hub
+from app.core.storage import delete_object_if_exists, move_object
 from app.core.unread_cache import unread_cache
 from app.models.attachment import Attachment, UploadSession
 from app.models.auth_email_code import AuthEmailCode
@@ -108,27 +110,46 @@ def cleanup_expired_upload_sessions() -> dict[str, int]:
     return asyncio.run(_cleanup_expired_upload_sessions_impl())
 
 
-async def _mark_expired_messages_impl() -> int:
+async def _mark_expired_messages_impl() -> dict[str, int]:
     async with AsyncSessionLocal() as session:
+        now_dt = _now()
+
         result = await session.execute(
             select(Message).where(
-                Message.expires_at <= _now(),
+                Message.expires_at <= now_dt,
                 Message.is_deleted_global.is_(False),
             )
         )
         messages = list(result.scalars().all())
+        message_ids = [message.id for message in messages]
 
-        now_dt = _now()
         for message in messages:
             message.is_deleted_global = True
             message.deleted_global_at = now_dt
 
+        attachments: list[Attachment] = []
+        if message_ids:
+            attachments_result = await session.execute(
+                select(Attachment).where(
+                    Attachment.message_id.in_(message_ids),
+                    Attachment.deleted_at.is_(None),
+                )
+            )
+            attachments = list(attachments_result.scalars().all())
+
+            for attachment in attachments:
+                attachment.deleted_at = now_dt
+                attachment.upload_status = AttachmentStatus.DELETED
+
         await session.commit()
-        return len(messages)
+        return {
+            "expired_messages": len(messages),
+            "deleted_attachments": len(attachments),
+        }
 
 
 @celery_app.task(name="app.worker.tasks.mark_expired_messages")
-def mark_expired_messages() -> int:
+def mark_expired_messages() -> dict[str, int]:
     return asyncio.run(_mark_expired_messages_impl())
 
 
@@ -270,3 +291,64 @@ async def _reconcile_presence_last_seen_impl() -> int:
 @celery_app.task(name="app.worker.tasks.reconcile_presence_last_seen")
 def reconcile_presence_last_seen() -> int:
     return asyncio.run(_reconcile_presence_last_seen_impl())
+
+
+async def _delete_marked_attachment_objects_impl() -> dict[str, int]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Attachment).where(Attachment.deleted_at.is_not(None))
+        )
+        attachments = list(result.scalars().all())
+
+        deleted_objects = 0
+        for attachment in attachments:
+            removed = await delete_object_if_exists(
+                bucket_name=attachment.bucket_name,
+                object_name=attachment.storage_key,
+            )
+            if removed:
+                deleted_objects += 1
+
+        return {
+            "attachments_checked": len(attachments),
+            "objects_deleted": deleted_objects,
+        }
+
+
+@celery_app.task(name="app.worker.tasks.delete_marked_attachment_objects")
+def delete_marked_attachment_objects() -> dict[str, int]:
+    return asyncio.run(_delete_marked_attachment_objects_impl())
+
+
+async def _migrate_legacy_temp_attachments_impl() -> dict[str, int]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Attachment).where(
+                Attachment.bucket_name == settings.minio_bucket_temp,
+                Attachment.deleted_at.is_(None),
+            )
+        )
+        attachments = list(result.scalars().all())
+
+        migrated = 0
+        for attachment in attachments:
+            await move_object(
+                src_bucket_name=attachment.bucket_name,
+                src_object_name=attachment.storage_key,
+                dst_bucket_name=settings.minio_bucket_attachments,
+                dst_object_name=attachment.storage_key,
+            )
+            attachment.bucket_name = settings.minio_bucket_attachments
+            migrated += 1
+
+        await session.commit()
+
+        return {
+            "checked": len(attachments),
+            "migrated": migrated,
+        }
+
+
+@celery_app.task(name="app.worker.tasks.migrate_legacy_temp_attachments")
+def migrate_legacy_temp_attachments() -> dict[str, int]:
+    return asyncio.run(_migrate_legacy_temp_attachments_impl())

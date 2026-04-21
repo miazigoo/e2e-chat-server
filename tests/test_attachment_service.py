@@ -49,9 +49,18 @@ async def test_get_attachment_metadata_returns_presigned_url(
         "get_attachment_for_user",
         fake_get_attachment_for_user,
     )
+
+    async def fake_build_presigned_get_url(
+        *,
+        bucket_name: str,
+        object_name: str,
+    ) -> str:
+        return f"https://minio.local/{bucket_name}/{object_name}"
+
     monkeypatch.setattr(
-        "app.services.attachment_service.get_minio_client",
-        lambda: FakeMinio(),
+        attachment_service,
+        "build_presigned_get_url",
+        fake_build_presigned_get_url,
     )
 
     result = await attachment_service.get_attachment_metadata(

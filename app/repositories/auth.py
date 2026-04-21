@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.auth_email_code import AuthEmailCode
@@ -46,6 +46,22 @@ class AuthRepository:
             )
         )
         return int(result.scalar_one() or 0)
+
+    async def invalidate_active_email_codes(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+    ) -> int:
+        result = await session.execute(
+            delete(AuthEmailCode)
+            .where(
+                AuthEmailCode.user_id == user_id,
+                AuthEmailCode.consumed_at.is_(None),
+            )
+            .returning(AuthEmailCode.id)
+        )
+        return len(result.scalars().all())
 
     async def create_email_code(
         self,

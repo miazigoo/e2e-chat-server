@@ -29,12 +29,28 @@ def _api_error_response(
         error=ErrorBody(code=code, message=message),
         meta=MetaSchema(request_id=_get_request_id(request)),
     )
-    return JSONResponse(status_code=status_code, content=payload.model_dump())
+    return JSONResponse(
+        status_code=status_code,
+        content=payload.model_dump(mode="json"),
+    )
 
 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
+        log_extra = {
+            "request_id": _get_request_id(request),
+            "path": str(request.url.path),
+            "method": request.method,
+            "status_code": exc.status_code,
+            "code": exc.code,
+        }
+
+        if exc.status_code >= 500:
+            logger.error("Application error", extra=log_extra)
+        else:
+            logger.warning("Application error", extra=log_extra)
+
         return _api_error_response(
             request=request,
             status_code=exc.status_code,
@@ -56,6 +72,17 @@ def register_error_handlers(app: FastAPI) -> None:
             code = "HTTP_ERROR"
             message = str(detail or "Request failed")
 
+        logger.warning(
+            "HTTP exception",
+            extra={
+                "request_id": _get_request_id(request),
+                "path": str(request.url.path),
+                "method": request.method,
+                "status_code": exc.status_code,
+                "code": code,
+            },
+        )
+
         return _api_error_response(
             request=request,
             status_code=exc.status_code,
@@ -68,7 +95,17 @@ def register_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        logger.warning("Validation error", extra={"errors": exc.errors()})
+        logger.warning(
+            "Validation error",
+            extra={
+                "request_id": _get_request_id(request),
+                "path": str(request.url.path),
+                "method": request.method,
+                "status_code": 422,
+                "code": "VALIDATION_ERROR",
+            },
+        )
+
         return _api_error_response(
             request=request,
             status_code=422,
@@ -81,7 +118,18 @@ def register_error_handlers(app: FastAPI) -> None:
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
-        logger.exception("Unhandled application error", exc_info=exc)
+        logger.exception(
+            "Unhandled application error",
+            extra={
+                "request_id": _get_request_id(request),
+                "path": str(request.url.path),
+                "method": request.method,
+                "status_code": 500,
+                "code": "INTERNAL_ERROR",
+            },
+            exc_info=exc,
+        )
+
         return _api_error_response(
             request=request,
             status_code=500,

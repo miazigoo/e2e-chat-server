@@ -1,13 +1,16 @@
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit_log
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
 from app.models.chat_enums import EventType
+from app.models.message import Message
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
+from app.repositories.files import FilesRepository
 from app.repositories.messages import MessagesRepository
 from app.repositories.users import UsersRepository
 from app.schemas.conversations import (
@@ -23,6 +26,7 @@ from app.schemas.conversations import (
 users_repo = UsersRepository()
 conversations_repo = ConversationsRepository()
 messages_repo = MessagesRepository()
+files_repo = FilesRepository()
 
 
 def _now() -> datetime:
@@ -46,6 +50,20 @@ def _peer_user_id(
     if conversation_user_a_id == current_user_id:
         return conversation_user_b_id
     return conversation_user_a_id
+
+
+def _ensure_conversation_mutable(*, is_purged: bool, is_active: bool) -> None:
+    if is_purged:
+        raise GoneError(
+            code="CONVERSATION_PURGED",
+            message="Conversation is purged",
+        )
+
+    if not is_active:
+        raise ConflictError(
+            code="CONVERSATION_INACTIVE",
+            message="Conversation is inactive",
+        )
 
 
 def _event_to_realtime_payload(
@@ -219,6 +237,11 @@ async def update_conversation(
             message="Conversation not found",
         )
 
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
     await conversations_repo.update_conversation(
         session,
         conversation=conversation,
@@ -252,6 +275,22 @@ async def clear_local(
             message="Conversation not found",
         )
 
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
     cleared_at = _now()
     await conversations_repo.clear_local_for_user(
         session,
@@ -267,17 +306,11 @@ async def clear_local(
         payload={"scope": "local"},
     )
 
-    conversation = await conversations_repo.get_for_user(
+    await conversations_repo.touch_conversation(
         session,
-        conversation_id=conversation_id,
-        user_id=current_user.id,
+        conversation=conversation,
+        touched_at=cleared_at,
     )
-    if conversation is not None:
-        await conversations_repo.touch_conversation(
-            session,
-            conversation=conversation,
-            touched_at=cleared_at,
-        )
 
     await session.commit()
 
@@ -327,11 +360,36 @@ async def clear_global(
             message="Conversation not found",
         )
 
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    now_dt = _now()
+
+    message_ids_result = await session.execute(
+        select(Message.id).where(
+            Message.conversation_id == conversation_id,
+            Message.is_deleted_global.is_(False),
+        )
+    )
+    message_ids = list(message_ids_result.scalars().all())
+
     deleted_count = await messages_repo.clear_global_conversation(
         session,
         conversation_id=conversation_id,
         actor_user_id=current_user.id,
-        deleted_at=_now(),
+        deleted_at=now_dt,
+    )
+
+    attachments = await files_repo.list_by_message_ids(
+        session,
+        message_ids=message_ids,
+    )
+    deleted_attachment_ids = await files_repo.mark_attachments_deleted(
+        session,
+        attachments=attachments,
+        deleted_at=now_dt,
     )
 
     event = await conversations_repo.create_event(
@@ -344,24 +402,35 @@ async def clear_global(
             "scope": "global",
             "reason": payload.reason,
             "deleted_messages_count": deleted_count,
+            "deleted_attachment_ids": deleted_attachment_ids,
         },
     )
 
     await conversations_repo.touch_conversation(
         session,
         conversation=conversation,
-        touched_at=_now(),
+        touched_at=now_dt,
     )
 
     await session.commit()
+
+    peer_user_id = _peer_user_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
 
     audit_log(
         "conversation_cleared_global",
         user_id=current_user.id,
         conversation_id=conversation_id,
-        extra={"deleted_messages_count": deleted_count},
+        extra={
+            "deleted_messages_count": deleted_count,
+            "deleted_attachment_ids": deleted_attachment_ids,
+        },
     )
     _enqueue_recompute_unread(current_user.id)
+    _enqueue_recompute_unread(peer_user_id)
 
     realtime_payload = _event_to_realtime_payload(
         conversation_id=conversation_id,
@@ -375,10 +444,12 @@ async def clear_global(
         created_at=event.created_at,
     )
     await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {
         "conversation_id": conversation_id,
         "scope": "global",
         "cleared": True,
         "deleted_messages_count": deleted_count,
+        "deleted_attachment_ids": deleted_attachment_ids,
     }

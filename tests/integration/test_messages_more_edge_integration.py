@@ -1,5 +1,6 @@
 # coding=utf-8
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,7 @@ async def test_mark_read_foreign_message_fails(session: AsyncSession) -> None:
         payload=SendMessageRequest(
             conversation_id=conversation.id,
             recipient_user_id=recipient.id,
+            message_uuid=str(uuid4()),
             message_type="text",
             ciphertext="msg",
             ciphertext_version=1,
@@ -92,6 +94,7 @@ async def test_send_message_to_user_without_active_device_fails(
             payload=SendMessageRequest(
                 conversation_id=conversation.id,
                 recipient_user_id=recipient.id,
+                message_uuid=str(uuid4()),
                 message_type="text",
                 ciphertext="cipher",
                 encryption_mode="signal",

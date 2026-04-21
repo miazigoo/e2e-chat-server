@@ -36,6 +36,10 @@ celery_app.conf.update(
             "task": "app.worker.tasks.reconcile_presence_last_seen",
             "schedule": 2 * 60,
         },
+        "delete-marked-attachment-objects-every-10-minutes": {
+            "task": "app.worker.tasks.delete_marked_attachment_objects",
+            "schedule": 10 * 60,
+        },
     },
 )
 

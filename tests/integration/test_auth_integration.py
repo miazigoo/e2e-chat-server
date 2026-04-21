@@ -4,10 +4,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import (
     BadRequestError,
     ConflictError,
     LockedError,
+    NotFoundError,
     UnauthorizedError,
 )
 from app.core.security import hash_password
@@ -284,3 +286,121 @@ async def test_verify_email_code_expired_fails(session: AsyncSession) -> None:
     assert exc.value.status_code == 400
     assert exc.value.code == "CHALLENGE_EXPIRED"
     assert exc.value.message == "Login challenge expired"
+
+
+async def test_register_user_requires_email_for_2fa(
+    session: AsyncSession,
+) -> None:
+    with pytest.raises(BadRequestError) as exc:
+        await register_user(
+            session,
+            RegisterRequest(
+                nickname="@needemail",
+                password="supersecret123",
+                email=None,
+                email_2fa_enabled=True,
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.code == "EMAIL_REQUIRED_FOR_2FA"
+
+
+async def test_verify_email_code_locks_after_max_attempts(
+    session: AsyncSession,
+) -> None:
+    await create_user(
+        session,
+        nickname="@u1",
+        password_hash=hash_password("correct-password"),
+        email="u1@example.com",
+        email_2fa_enabled=True,
+    )
+    await session.commit()
+
+    login_result = await login_user(
+        session,
+        LoginRequest(nickname="@u1", password="correct-password"),
+    )
+
+    challenge_id = login_result["login_challenge_id"]
+
+    for _ in range(settings.email_code_max_attempts - 1):
+        with pytest.raises(BadRequestError) as exc:
+            await verify_email_code(
+                session,
+                VerifyEmailCodeRequest(
+                    login_challenge_id=challenge_id,
+                    code="000000",
+                ),
+            )
+
+        assert exc.value.code == "INVALID_EMAIL_CODE"
+
+    with pytest.raises(LockedError) as exc:
+        await verify_email_code(
+            session,
+            VerifyEmailCodeRequest(
+                login_challenge_id=challenge_id,
+                code="000000",
+            ),
+        )
+
+    assert exc.value.status_code == 423
+    assert exc.value.code == "EMAIL_CODE_ATTEMPTS_EXCEEDED"
+
+    query = await session.execute(
+        select(AuthEmailCode).where(AuthEmailCode.login_challenge_id == challenge_id)
+    )
+    record = query.scalar_one()
+
+    assert record.attempts == settings.email_code_max_attempts
+    assert record.consumed_at is not None
+
+
+async def test_new_login_invalidates_previous_email_challenge(
+    session: AsyncSession,
+) -> None:
+    await create_user(
+        session,
+        nickname="@u1",
+        password_hash=hash_password("correct-password"),
+        email="u1@example.com",
+        email_2fa_enabled=True,
+    )
+    await session.commit()
+
+    first_login = await login_user(
+        session,
+        LoginRequest(nickname="@u1", password="correct-password"),
+    )
+    second_login = await login_user(
+        session,
+        LoginRequest(nickname="@u1", password="correct-password"),
+    )
+
+    first_challenge_id = first_login["login_challenge_id"]
+    second_challenge_id = second_login["login_challenge_id"]
+
+    assert first_challenge_id != second_challenge_id
+
+    with pytest.raises(NotFoundError) as exc:
+        await verify_email_code(
+            session,
+            VerifyEmailCodeRequest(
+                login_challenge_id=first_challenge_id,
+                code=first_login["debug_code"],
+            ),
+        )
+
+    assert exc.value.code == "CHALLENGE_NOT_FOUND"
+
+    result = await verify_email_code(
+        session,
+        VerifyEmailCodeRequest(
+            login_challenge_id=second_challenge_id,
+            code=second_login["debug_code"],
+        ),
+    )
+
+    assert "bootstrap_token" in result or "access_token" in result

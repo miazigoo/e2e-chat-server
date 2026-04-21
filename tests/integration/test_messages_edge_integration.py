@@ -1,5 +1,6 @@
 # coding=utf-8
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,7 @@ async def test_send_message_wrong_recipient_in_conversation(
             payload=SendMessageRequest(
                 conversation_id=conversation.id,
                 recipient_user_id=stranger.id,
+                message_uuid=str(uuid4()),
                 message_type="text",
                 ciphertext="cipher",
                 encryption_mode="signal",
@@ -85,6 +87,7 @@ async def test_delete_global_does_not_delete_foreign_messages(
         payload=SendMessageRequest(
             conversation_id=conversation.id,
             recipient_user_id=recipient.id,
+            message_uuid=str(uuid4()),
             message_type="text",
             ciphertext="msg1",
             ciphertext_version=1,
@@ -102,6 +105,7 @@ async def test_delete_global_does_not_delete_foreign_messages(
         payload=SendMessageRequest(
             conversation_id=conversation.id,
             recipient_user_id=sender.id,
+            message_uuid=str(uuid4()),
             message_type="text",
             ciphertext="msg2",
             ciphertext_version=1,

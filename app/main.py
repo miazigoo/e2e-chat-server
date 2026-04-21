@@ -25,15 +25,35 @@ from app.core.unread_cache import unread_cache
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
     bind_realtime_handlers()
-    await init_db()
-    await rate_limiter.start()
-    await unread_cache.start()
-    await realtime_hub.start()
-    yield
-    await realtime_hub.stop()
-    await unread_cache.stop()
-    await rate_limiter.stop()
-    await close_db()
+
+    rate_limiter_started = False
+    unread_cache_started = False
+    realtime_hub_started = False
+
+    try:
+        await init_db()
+
+        await rate_limiter.start()
+        rate_limiter_started = True
+
+        await unread_cache.start()
+        unread_cache_started = True
+
+        await realtime_hub.start()
+        realtime_hub_started = True
+
+        yield
+    finally:
+        if realtime_hub_started:
+            await realtime_hub.stop()
+
+        if unread_cache_started:
+            await unread_cache.stop()
+
+        if rate_limiter_started:
+            await rate_limiter.stop()
+
+        await close_db()
 
 
 app = FastAPI(
@@ -55,15 +75,12 @@ app.add_middleware(
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=(
-        ["*"] if settings.app_env != "production" else ["localhost", "127.0.0.1"]
-    ),
+    allowed_hosts=settings.trusted_hosts,
 )
 
 setup_metrics(app)
 setup_tracing(app, service_name=settings.app_name)
 setup_sentry(app)
-
 register_error_handlers(app)
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
