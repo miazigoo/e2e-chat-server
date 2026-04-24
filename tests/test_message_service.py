@@ -7,7 +7,11 @@ import pytest
 
 import app.services.message_service as message_service
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
-from app.schemas.messages import MarkReadRequest, SendMessageRequest
+from app.schemas.messages import (
+    MarkReadRequest,
+    SendMessageRequest,
+    SetMessageReactionRequest,
+)
 
 
 def _now() -> datetime:
@@ -41,6 +45,42 @@ def _device(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
+def _participant(**overrides: Any) -> SimpleNamespace:
+    base = {
+        "conversation_id": 1,
+        "user_id": 1,
+        "cleared_at": None,
+        "shared_secret_enabled": False,
+        "shared_secret_fingerprint": None,
+        "shared_secret_updated_at": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _patch_participant(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    shared_secret_enabled: bool = False,
+) -> None:
+    async def fake_get_participant(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return _participant(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            shared_secret_enabled=shared_secret_enabled,
+        )
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_participant",
+        fake_get_participant,
+    )
+
+
 @pytest.mark.asyncio
 async def test_send_message_conversation_not_found(
     monkeypatch: pytest.MonkeyPatch,
@@ -57,6 +97,7 @@ async def test_send_message_conversation_not_found(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -100,6 +141,7 @@ async def test_send_message_invalid_recipient(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -143,6 +185,7 @@ async def test_send_message_to_purged_conversation(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -194,6 +237,7 @@ async def test_send_message_when_recipient_has_no_device(
         "get_active_by_user_id",
         fake_get_active_by_user_id,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -273,6 +317,7 @@ async def test_send_message_rejects_client_service_message(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -316,6 +361,7 @@ async def test_send_message_file_requires_attachments(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -360,6 +406,7 @@ async def test_send_message_rejects_encryption_mode_mismatch_for_normal_chat(
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch)
 
     session = cast(Any, SimpleNamespace())
 
@@ -389,7 +436,7 @@ async def test_send_message_rejects_encryption_mode_mismatch_for_normal_chat(
 async def test_send_message_rejects_encryption_mode_mismatch_for_shared_secret_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    conversation = _conversation(protection_mode="shared_secret")
+    conversation = _conversation(protection_mode="normal")
 
     async def fake_get_for_user(
         session: Any,
@@ -403,6 +450,7 @@ async def test_send_message_rejects_encryption_mode_mismatch_for_shared_secret_c
         "get_for_user",
         fake_get_for_user,
     )
+    _patch_participant(monkeypatch, shared_secret_enabled=True)
 
     session = cast(Any, SimpleNamespace())
 
@@ -427,3 +475,42 @@ async def test_send_message_rejects_encryption_mode_mismatch_for_shared_secret_c
     assert exc.value.status_code == 400
     assert exc.value.code == "INVALID_ENCRYPTION_MODE"
 
+
+@pytest.mark.asyncio
+async def test_set_message_reaction_message_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_by_id(session: Any, message_id: int) -> Any:
+        return None
+
+    monkeypatch.setattr(message_service.messages_repo, "get_by_id", fake_get_by_id)
+
+    session = cast(Any, SimpleNamespace())
+
+    with pytest.raises(NotFoundError) as exc:
+        await message_service.set_message_reaction(
+            session,
+            current_user=cast(Any, SimpleNamespace(id=1)),
+            current_device=cast(Any, _device()),
+            message_id=999,
+            payload=SetMessageReactionRequest(reaction="👍"),
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.code == "MESSAGE_NOT_FOUND"
+
+
+def test_build_reaction_summaries_marks_my_reaction() -> None:
+    reactions = [
+        SimpleNamespace(reaction="👍", user_id=1),
+        SimpleNamespace(reaction="👍", user_id=2),
+        SimpleNamespace(reaction="❤️", user_id=2),
+    ]
+
+    assert message_service._build_reaction_summaries(  # noqa: SLF001
+        reactions,
+        current_user_id=1,
+    ) == [
+        {"reaction": "👍", "count": 2, "me": True},
+        {"reaction": "❤️", "count": 1, "me": False},
+    ]

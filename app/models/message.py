@@ -1,8 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -216,7 +225,6 @@ class MessageVisibilityOverride(Base):
             name="uq_message_visibility_overrides_message_user",
         ),
     )
-
 
 
 class MessageReaction(Base):

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_enums import (
@@ -368,13 +368,18 @@ class MessagesRepository:
         user_id: int,
     ) -> bool:
         result = await session.execute(
-            delete(MessageReaction).where(
+            select(MessageReaction).where(
                 MessageReaction.message_id == message_id,
                 MessageReaction.user_id == user_id,
             )
         )
+        message_reaction = result.scalar_one_or_none()
+        if message_reaction is None:
+            return False
+
+        await session.delete(message_reaction)
         await session.flush()
-        return bool(result.rowcount)
+        return True
 
     async def mark_delivered(
         self,

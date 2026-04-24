@@ -9,8 +9,8 @@ from app.schemas.common import ApiResponse
 from app.schemas.conversations import (
     ClearConversationRequest,
     ClearConversationResponseData,
-    CreateConversationRequest,
     ConversationSettingsResponseData,
+    CreateConversationRequest,
     CreateConversationResponseData,
     GetConversationResponseData,
     ListConversationsResponseData,
@@ -122,7 +122,6 @@ async def update_conversation_endpoint(
         payload=payload,
     )
     return ApiResponse(data=UpdateConversationResponseData(**data))
-
 
 
 @router.patch(

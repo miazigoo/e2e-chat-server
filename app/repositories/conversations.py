@@ -198,9 +198,7 @@ class ConversationsRepository:
                     "last_message": last_message_by_conversation_id.get(
                         conversation.id
                     ),
-                    "participant": participant_by_conversation_id.get(
-                        conversation.id
-                    ),
+                    "participant": participant_by_conversation_id.get(conversation.id),
                     "peer_participant": peer_participant_by_conversation_id.get(
                         conversation.id
                     ),

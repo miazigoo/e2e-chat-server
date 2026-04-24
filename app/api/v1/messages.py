@@ -151,7 +151,6 @@ async def delete_global_endpoint(
     return ApiResponse(data=DeleteMessagesResponseData(**result))
 
 
-
 @router.post(
     "/{message_id}/reaction",
     response_model=ApiResponse[SetMessageReactionResponseData],

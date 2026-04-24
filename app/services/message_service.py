@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -161,27 +161,36 @@ def _validate_encryption_mode_for_participant(
         )
 
 
+class ReactionSummary(TypedDict):
+    reaction: str
+    count: int
+    me: bool
+
 
 def _build_reaction_summaries(
     reactions: list[Any],
     *,
     current_user_id: int,
 ) -> list[dict[str, object]]:
-    summaries: dict[str, dict[str, object]] = {}
+    summaries: dict[str, ReactionSummary] = {}
 
     for reaction in reactions:
+        reaction_value = str(reaction.reaction)
         summary = summaries.setdefault(
-            reaction.reaction,
-            {"reaction": reaction.reaction, "count": 0, "me": False},
+            reaction_value,
+            {"reaction": reaction_value, "count": 0, "me": False},
         )
-        summary["count"] = int(summary["count"]) + 1
+        summary["count"] += 1
         if reaction.user_id == current_user_id:
             summary["me"] = True
 
-    return sorted(
-        summaries.values(),
-        key=lambda item: (-int(item["count"]), str(item["reaction"])),
-    )
+    return [
+        dict(item)
+        for item in sorted(
+            summaries.values(),
+            key=lambda item: (-item["count"], item["reaction"]),
+        )
+    ]
 
 
 async def _get_reactable_message(
@@ -249,22 +258,8 @@ async def send_message(
         is_purged=conversation.is_purged,
         is_active=conversation.is_active,
     )
-    participant = await conversations_repo.get_participant(
-        session,
-        conversation_id=conversation.id,
-        user_id=current_user.id,
-    )
-    if participant is None:
-        raise NotFoundError(
-            code="CONVERSATION_NOT_FOUND",
-            message="Conversation not found",
-        )
 
     _validate_client_message_payload(payload)
-    _validate_encryption_mode_for_participant(
-        shared_secret_enabled=participant.shared_secret_enabled,
-        encryption_mode=payload.encryption_mode,
-    )
 
     expected_recipient_id = _other_participant_id(
         conversation.user_a_id,
@@ -288,6 +283,22 @@ async def send_message(
                 code="REPLY_TARGET_NOT_FOUND",
                 message="Reply target message not found",
             )
+
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation.id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _validate_encryption_mode_for_participant(
+        shared_secret_enabled=participant.shared_secret_enabled,
+        encryption_mode=payload.encryption_mode,
+    )
 
     recipient_device = await devices_repo.get_active_by_user_id(
         session,
