@@ -44,8 +44,10 @@ def test_get_key_bundle_success(
             "user_id": target_user_id,
             "device_id": 22,
             "requested_by_device_id": current_device.id,
+            "registration_id": 7001,
             "public_identity_key": "identity-key",
             "public_signing_key": "signing-key",
+            "signed_prekey_id": 51,
             "signed_prekey": "signed-prekey",
             "signed_prekey_signature": "signature",
             "one_time_prekey": {

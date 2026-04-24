@@ -20,6 +20,11 @@ from app.services.auth_service import login_user, register_user, verify_email_co
 from tests.integration.helpers import create_user
 
 
+@pytest.fixture
+def enable_debug_email_codes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "allow_debug_email_codes", True)
+
+
 async def test_register_user_persists_user(session: AsyncSession) -> None:
     result = await register_user(
         session,
@@ -172,7 +177,10 @@ async def test_login_success_with_email_2fa_creates_code(session: AsyncSession) 
     assert codes[0].consumed_at is None
 
 
-async def test_verify_email_code_success(session: AsyncSession) -> None:
+async def test_verify_email_code_success(
+    session: AsyncSession,
+    enable_debug_email_codes: None,
+) -> None:
     await create_user(
         session,
         nickname="@u1",
@@ -210,7 +218,10 @@ async def test_verify_email_code_success(session: AsyncSession) -> None:
     assert record.consumed_at is not None
 
 
-async def test_verify_email_code_reuse_fails(session: AsyncSession) -> None:
+async def test_verify_email_code_reuse_fails(
+    session: AsyncSession,
+    enable_debug_email_codes: None,
+) -> None:
     await create_user(
         session,
         nickname="@u1",
@@ -250,7 +261,10 @@ async def test_verify_email_code_reuse_fails(session: AsyncSession) -> None:
     assert exc.value.message == "Login challenge already used"
 
 
-async def test_verify_email_code_expired_fails(session: AsyncSession) -> None:
+async def test_verify_email_code_expired_fails(
+    session: AsyncSession,
+    enable_debug_email_codes: None,
+) -> None:
     await create_user(
         session,
         nickname="@u1",
@@ -360,6 +374,7 @@ async def test_verify_email_code_locks_after_max_attempts(
 
 async def test_new_login_invalidates_previous_email_challenge(
     session: AsyncSession,
+    enable_debug_email_codes: None,
 ) -> None:
     await create_user(
         session,

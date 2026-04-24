@@ -72,8 +72,10 @@ class DevicesRepository:
         platform: str,
         app_version: str,
         fcm_token: str | None,
+        registration_id: int,
         public_identity_key: str,
         public_signing_key: str,
+        signed_prekey_id: int,
         signed_prekey: str,
         signed_prekey_signature: str,
     ) -> Device:
@@ -82,8 +84,10 @@ class DevicesRepository:
             existing_device.platform = platform
             existing_device.app_version = app_version
             existing_device.fcm_token = fcm_token
+            existing_device.registration_id = registration_id
             existing_device.public_identity_key = public_identity_key
             existing_device.public_signing_key = public_signing_key
+            existing_device.signed_prekey_id = signed_prekey_id
             existing_device.signed_prekey = signed_prekey
             existing_device.signed_prekey_signature = signed_prekey_signature
             existing_device.is_active = True
@@ -98,8 +102,10 @@ class DevicesRepository:
             platform=platform,
             app_version=app_version,
             fcm_token=fcm_token,
+            registration_id=registration_id,
             public_identity_key=public_identity_key,
             public_signing_key=public_signing_key,
+            signed_prekey_id=signed_prekey_id,
             signed_prekey=signed_prekey,
             signed_prekey_signature=signed_prekey_signature,
             is_active=True,

@@ -24,8 +24,10 @@ async def test_get_key_bundle_for_user_success_with_prekey(
         return SimpleNamespace(
             id=22,
             prekeys_count=50,
+            registration_id=7001,
             public_identity_key="identity",
             public_signing_key="signing",
+            signed_prekey_id=51,
             signed_prekey="signed",
             signed_prekey_signature="signature",
         )
@@ -68,6 +70,8 @@ async def test_get_key_bundle_for_user_success_with_prekey(
     assert result["user_id"] == 2
     assert result["device_id"] == 22
     assert result["requested_by_device_id"] == 10
+    assert result["registration_id"] == 7001
+    assert result["signed_prekey_id"] == 51
     assert result["one_time_prekey"]["prekey_id"] == 101
     assert result["prekeys_remaining"] == 49
 
@@ -87,8 +91,10 @@ async def test_get_key_bundle_for_user_success_without_prekey(
         return SimpleNamespace(
             id=22,
             prekeys_count=0,
+            registration_id=7002,
             public_identity_key="identity",
             public_signing_key="signing",
+            signed_prekey_id=52,
             signed_prekey="signed",
             signed_prekey_signature="signature",
         )
@@ -262,9 +268,11 @@ async def test_rotate_signed_prekey_success(
     async def fake_rotate_signed_prekey(
         session: Any,
         device: Any,
+        signed_prekey_id: int,
         signed_prekey: str,
         signed_prekey_signature: str,
     ) -> Any:
+        device.signed_prekey_id = signed_prekey_id
         device.signed_prekey = signed_prekey
         device.signed_prekey_signature = signed_prekey_signature
         return device
@@ -285,6 +293,7 @@ async def test_rotate_signed_prekey_success(
         cast(Any, session),
         current_device=cast(Any, current_device),
         payload=RotateSignedPreKeyRequest(
+            signed_prekey_id=9,
             signed_prekey="new-spk",
             signed_prekey_signature="new-sig",
         ),

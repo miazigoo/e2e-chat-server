@@ -57,8 +57,10 @@ async def bootstrap_device(
         platform=payload.platform,
         app_version=payload.app_version,
         fcm_token=payload.fcm_token,
+        registration_id=payload.registration_id,
         public_identity_key=payload.public_identity_key,
         public_signing_key=payload.public_signing_key,
+        signed_prekey_id=payload.signed_prekey_id,
         signed_prekey=payload.signed_prekey,
         signed_prekey_signature=payload.signed_prekey_signature,
     )

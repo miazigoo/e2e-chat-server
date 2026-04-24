@@ -369,7 +369,7 @@ async def login_user(
             "email_masked": _mask_email(user.email),
         }
 
-        if settings.debug:
+        if settings.allow_debug_email_codes:
             response["debug_code"] = code
 
         return response

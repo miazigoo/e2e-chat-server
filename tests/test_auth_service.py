@@ -414,6 +414,63 @@ async def test_login_success_with_2fa_returns_challenge(
     assert result["requires_email_code"] is True
     assert "login_challenge_id" in result
     assert result["email_masked"] == "t***@example.com"
+    assert "debug_code" not in result
+
+
+@pytest.mark.asyncio
+async def test_login_success_with_2fa_returns_debug_code_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(
+        failed_login_stage=0,
+        email_2fa_enabled=True,
+        email="tester@example.com",
+    )
+
+    async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
+        return user
+
+    async def fake_create_login_attempt(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_create_email_code(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_commit() -> None:
+        return None
+
+    async def fake_invalidate_active_email_codes(session: Any, user_id: int) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "invalidate_active_email_codes",
+        fake_invalidate_active_email_codes,
+    )
+    monkeypatch.setattr(
+        auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_email_code", fake_create_email_code
+    )
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda password, password_hash: True
+    )
+    monkeypatch.setattr(auth_service, "_generate_email_code", lambda: "123456")
+    monkeypatch.setattr(settings, "allow_debug_email_codes", True)
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    result = await auth_service.login_user(
+        session,
+        LoginRequest(nickname="@tester", password="supersecret123"),
+    )
+
+    assert result["requires_email_code"] is True
+    assert result["debug_code"] == "123456"
 
 
 @pytest.mark.asyncio

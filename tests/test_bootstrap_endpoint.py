@@ -50,8 +50,10 @@ def test_bootstrap_endpoint(
             "platform": "android",
             "app_version": "1.0.0",
             "fcm_token": "fcm-token",
+            "registration_id": 101,
             "public_identity_key": "identity-key",
             "public_signing_key": "signing-key",
+            "signed_prekey_id": 1,
             "signed_prekey": "signed-prekey",
             "signed_prekey_signature": "signature",
             "one_time_prekeys": [

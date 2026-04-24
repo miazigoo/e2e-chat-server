@@ -59,8 +59,10 @@ async def get_key_bundle_for_user(
         "user_id": target_user.id,
         "device_id": target_device.id,
         "requested_by_device_id": current_device.id,
+        "registration_id": target_device.registration_id,
         "public_identity_key": target_device.public_identity_key,
         "public_signing_key": target_device.public_signing_key,
+        "signed_prekey_id": target_device.signed_prekey_id,
         "signed_prekey": target_device.signed_prekey,
         "signed_prekey_signature": target_device.signed_prekey_signature,
         "one_time_prekey": (
@@ -124,6 +126,7 @@ async def rotate_signed_prekey(
     await keys_repo.rotate_signed_prekey(
         session,
         device=current_device,
+        signed_prekey_id=payload.signed_prekey_id,
         signed_prekey=payload.signed_prekey,
         signed_prekey_signature=payload.signed_prekey_signature,
     )

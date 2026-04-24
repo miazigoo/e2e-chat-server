@@ -36,8 +36,14 @@ class Device(Base):
 
     fcm_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    registration_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
     public_identity_key: Mapped[str] = mapped_column(Text, nullable=False)
     public_signing_key: Mapped[str] = mapped_column(Text, nullable=False)
+    signed_prekey_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
     signed_prekey: Mapped[str] = mapped_column(Text, nullable=False)
     signed_prekey_signature: Mapped[str] = mapped_column(Text, nullable=False)
 

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     email_code_expire_minutes: int = Field(
         default=10, alias="EMAIL_CODE_EXPIRE_MINUTES"
     )
+    allow_debug_email_codes: bool = Field(
+        default=False,
+        alias="ALLOW_DEBUG_EMAIL_CODES",
+    )
     email_code_max_attempts: int = Field(
         default=5,
         alias="EMAIL_CODE_MAX_ATTEMPTS",
@@ -94,6 +98,12 @@ class Settings(BaseSettings):
     def validate_prod_cors(self) -> "Settings":
         if self.app_env == "production" and self.backend_cors_origins == ["*"]:
             raise ValueError("BACKEND_CORS_ORIGINS cannot be '*' in production")
+        return self
+
+    @model_validator(mode="after")
+    def validate_debug_email_codes(self) -> "Settings":
+        if self.app_env == "production" and self.allow_debug_email_codes:
+            raise ValueError("ALLOW_DEBUG_EMAIL_CODES cannot be enabled in production")
         return self
 
     @model_validator(mode="after")

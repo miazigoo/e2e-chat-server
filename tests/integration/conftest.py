@@ -1,6 +1,7 @@
 import os
 from collections.abc import AsyncGenerator, Generator
 
+import docker
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -42,8 +43,25 @@ def _normalize_sqlalchemy_url(url: str) -> str:
     return url
 
 
+def _docker_is_available() -> bool:
+    try:
+        client = docker.from_env()
+        client.ping()
+        client.close()
+    except Exception:
+        return False
+    return True
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        item.add_marker(pytest.mark.integration)
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Generator[PostgresContainer, None, None]:
+    if not _docker_is_available():
+        pytest.skip("Docker daemon is not available for integration tests")
     with PostgresContainer("postgres:16") as postgres:
         yield postgres
 

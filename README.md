@@ -21,7 +21,16 @@ Production-oriented backend for secure 1:1 Android chat.
 ## Local development
 
 ```bash
+cp .env.example .env
 docker compose up --build
+```
+
+## Useful commands
+
+```bash
+make test-unit
+make test-integration
+make lint
 ```
 ---
 ## API docs
@@ -165,13 +174,14 @@ Body:
     "requires_email_code": true,
     "requires_bootstrap": false,
     "login_challenge_id": "uuid",
-    "email_masked": "a***@example.com",
-    "debug_code": "123456"
+    "email_masked": "a***@example.com"
   },
   "meta": {}
 }
 
 ```
+
+`debug_code` is intentionally disabled by default and should only be enabled in non-production via `ALLOW_DEBUG_EMAIL_CODES=true`.
 
 ### 4. Verify email code
 #### Request

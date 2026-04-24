@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.mypy_cache
+.pytest_cache
+.venv
+__pycache__
+*.pyc
+.env
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+coverage_html
+htmlcov

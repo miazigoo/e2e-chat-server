@@ -17,8 +17,10 @@ class BootstrapDeviceRequest(BaseModel):
     app_version: str = Field(min_length=1, max_length=64)
     fcm_token: str | None = None
 
+    registration_id: int = Field(ge=1)
     public_identity_key: str = Field(min_length=1)
     public_signing_key: str = Field(min_length=1)
+    signed_prekey_id: int = Field(default=1, ge=1)
     signed_prekey: str = Field(min_length=1)
     signed_prekey_signature: str = Field(min_length=1)
 

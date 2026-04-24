@@ -87,9 +87,11 @@ class KeysRepository:
         session: AsyncSession,
         *,
         device: Device,
+        signed_prekey_id: int,
         signed_prekey: str,
         signed_prekey_signature: str,
     ) -> Device:
+        device.signed_prekey_id = signed_prekey_id
         device.signed_prekey = signed_prekey
         device.signed_prekey_signature = signed_prekey_signature
         await session.flush()
