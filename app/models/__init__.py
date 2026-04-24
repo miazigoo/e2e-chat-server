@@ -10,7 +10,12 @@ from app.models.conversation import (
 from app.models.device import Device
 from app.models.device_prekey import DevicePreKey
 from app.models.login_attempt import LoginAttempt
-from app.models.message import Message, MessageRecipientState, MessageVisibilityOverride
+from app.models.message import (
+    Message,
+    MessageReaction,
+    MessageRecipientState,
+    MessageVisibilityOverride,
+)
 from app.models.user import User
 
 __all__ = [
@@ -26,6 +31,7 @@ __all__ = [
     "DevicePreKey",
     "LoginAttempt",
     "Message",
+    "MessageReaction",
     "MessageRecipientState",
     "MessageVisibilityOverride",
     "User",

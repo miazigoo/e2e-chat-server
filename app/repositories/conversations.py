@@ -119,13 +119,19 @@ class ConversationsRepository:
 
         participants_result = await session.execute(
             select(ConversationParticipant).where(
-                ConversationParticipant.conversation_id.in_(conversation_ids),
-                ConversationParticipant.user_id == user_id,
+                ConversationParticipant.conversation_id.in_(conversation_ids)
             )
         )
         participants = list(participants_result.scalars().all())
         participant_by_conversation_id = {
-            participant.conversation_id: participant for participant in participants
+            participant.conversation_id: participant
+            for participant in participants
+            if participant.user_id == user_id
+        }
+        peer_participant_by_conversation_id = {
+            participant.conversation_id: participant
+            for participant in participants
+            if participant.user_id != user_id
         }
 
         peer_user_ids = {
@@ -190,6 +196,12 @@ class ConversationsRepository:
                         conversation.id, 0
                     ),
                     "last_message": last_message_by_conversation_id.get(
+                        conversation.id
+                    ),
+                    "participant": participant_by_conversation_id.get(
+                        conversation.id
+                    ),
+                    "peer_participant": peer_participant_by_conversation_id.get(
                         conversation.id
                     ),
                 }
@@ -264,6 +276,28 @@ class ConversationsRepository:
 
         await session.flush()
         return conversation
+
+    async def update_participant_settings(
+        self,
+        session: AsyncSession,
+        *,
+        participant: ConversationParticipant,
+        shared_secret_enabled: bool | None,
+        shared_secret_fingerprint: str | None,
+        updated_at: datetime,
+    ) -> ConversationParticipant:
+        if shared_secret_enabled is not None:
+            participant.shared_secret_enabled = shared_secret_enabled
+
+        if participant.shared_secret_enabled:
+            if shared_secret_fingerprint is not None:
+                participant.shared_secret_fingerprint = shared_secret_fingerprint
+        else:
+            participant.shared_secret_fingerprint = None
+
+        participant.shared_secret_updated_at = updated_at
+        await session.flush()
+        return participant
 
     async def clear_local_for_user(
         self,

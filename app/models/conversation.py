@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime
+from sqlalchemy import Boolean, CheckConstraint, DateTime
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -103,6 +103,13 @@ class ConversationParticipant(Base):
         DateTime(timezone=True), nullable=True
     )
     cleared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    shared_secret_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    shared_secret_fingerprint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shared_secret_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

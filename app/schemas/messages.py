@@ -62,6 +62,18 @@ class DeleteMessagesRequest(BaseModel):
         return value
 
 
+class SetMessageReactionRequest(BaseModel):
+    reaction: str = Field(min_length=1, max_length=32)
+
+    @field_validator("reaction")
+    @classmethod
+    def validate_reaction(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reaction must not be blank")
+        return value
+
+
 class SendMessageResponseData(BaseModel):
     message_id: int
     message_uuid: str
@@ -71,6 +83,12 @@ class SendMessageResponseData(BaseModel):
     server_received_at: datetime
     delivery_status: str
     is_idempotent_replay: bool = False
+
+
+class MessageReactionSummarySchema(BaseModel):
+    reaction: str
+    count: int
+    me: bool = False
 
 
 class MessageListItemSchema(BaseModel):
@@ -90,6 +108,7 @@ class MessageListItemSchema(BaseModel):
     read_at: datetime | None = None
     expires_at: datetime
     has_attachments: bool
+    reactions: list[MessageReactionSummarySchema] = Field(default_factory=list)
 
 
 class ListMessagesResponseData(BaseModel):
@@ -112,3 +131,14 @@ class DeleteMessagesResponseData(BaseModel):
     deleted: bool
     scope: str
     message_ids: list[int] = Field(default_factory=list)
+
+
+class SetMessageReactionResponseData(BaseModel):
+    message_id: int
+    reaction: str
+    updated: bool
+
+
+class DeleteMessageReactionResponseData(BaseModel):
+    message_id: int
+    removed: bool

@@ -21,6 +21,7 @@ from app.schemas.conversations import (
     CreateConversationRequest,
     ListConversationsResponseData,
     UpdateConversationRequest,
+    UpdateConversationSettingsRequest,
 )
 
 users_repo = UsersRepository()
@@ -148,6 +149,8 @@ async def list_conversations(
     for row in rows:
         conversation = row["conversation"]
         last_message = row["last_message"]
+        participant = row.get("participant")
+        peer_participant = row.get("peer_participant")
 
         last_message_schema = None
         if last_message is not None:
@@ -170,6 +173,26 @@ async def list_conversations(
                 protection_mode=conversation.protection_mode,
                 message_ttl_days=conversation.message_ttl_days,
                 delete_after_read_seconds=conversation.delete_after_read_seconds,
+                shared_secret_enabled=(
+                    participant.shared_secret_enabled
+                    if participant is not None
+                    else False
+                ),
+                shared_secret_fingerprint=(
+                    participant.shared_secret_fingerprint
+                    if participant is not None
+                    else None
+                ),
+                shared_secret_updated_at=(
+                    participant.shared_secret_updated_at
+                    if participant is not None
+                    else None
+                ),
+                peer_shared_secret_enabled=(
+                    peer_participant.shared_secret_enabled
+                    if peer_participant is not None
+                    else False
+                ),
                 is_active=conversation.is_active,
                 is_purged=conversation.is_purged,
                 updated_at=conversation.updated_at,
@@ -202,18 +225,44 @@ async def get_conversation(
             message="Conversation not found",
         )
 
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    peer_user_id = _peer_user_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+    peer_participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=peer_user_id,
+    )
+
     return {
         "conversation_id": conversation.id,
         "conversation_uuid": conversation.conversation_uuid,
         "title": conversation.title,
-        "peer_user_id": _peer_user_id(
-            conversation.user_a_id,
-            conversation.user_b_id,
-            current_user.id,
-        ),
+        "peer_user_id": peer_user_id,
         "protection_mode": conversation.protection_mode.value,
         "message_ttl_days": conversation.message_ttl_days,
         "delete_after_read_seconds": conversation.delete_after_read_seconds,
+        "shared_secret_enabled": (
+            participant.shared_secret_enabled if participant is not None else False
+        ),
+        "shared_secret_fingerprint": (
+            participant.shared_secret_fingerprint if participant is not None else None
+        ),
+        "shared_secret_updated_at": (
+            participant.shared_secret_updated_at if participant is not None else None
+        ),
+        "peer_shared_secret_enabled": (
+            peer_participant.shared_secret_enabled
+            if peer_participant is not None
+            else False
+        ),
         "is_active": conversation.is_active,
         "is_purged": conversation.is_purged,
     }
@@ -255,6 +304,103 @@ async def update_conversation(
     return {
         "conversation_id": conversation.id,
         "updated": True,
+    }
+
+
+async def update_conversation_settings(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    conversation_id: int,
+    payload: UpdateConversationSettingsRequest,
+) -> dict:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if not conversation:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    if (
+        payload.shared_secret_enabled is None
+        and payload.shared_secret_fingerprint is not None
+        and not participant.shared_secret_enabled
+    ):
+        raise BadRequestError(
+            code="SHARED_SECRET_DISABLED",
+            message="Enable shared secret before setting its fingerprint",
+        )
+
+    updated_at = _now()
+    participant = await conversations_repo.update_participant_settings(
+        session,
+        participant=participant,
+        shared_secret_enabled=payload.shared_secret_enabled,
+        shared_secret_fingerprint=payload.shared_secret_fingerprint,
+        updated_at=updated_at,
+    )
+
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=None,
+        event_type=EventType.CONVERSATION_SETTINGS_UPDATED,
+        payload={
+            "user_id": current_user.id,
+            "shared_secret_enabled": participant.shared_secret_enabled,
+            "shared_secret_updated_at": updated_at.isoformat(),
+        },
+    )
+
+    await session.commit()
+
+    audit_log(
+        "conversation_settings_updated",
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        extra={"shared_secret_enabled": participant.shared_secret_enabled},
+    )
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
+
+    return {
+        "conversation_id": conversation_id,
+        "user_id": current_user.id,
+        "shared_secret_enabled": participant.shared_secret_enabled,
+        "shared_secret_fingerprint": participant.shared_secret_fingerprint,
+        "shared_secret_updated_at": participant.shared_secret_updated_at,
     }
 
 

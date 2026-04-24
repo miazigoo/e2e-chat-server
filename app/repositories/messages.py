@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_enums import (
@@ -9,7 +9,12 @@ from app.models.chat_enums import (
     MessageType,
     VisibilityReason,
 )
-from app.models.message import Message, MessageRecipientState, MessageVisibilityOverride
+from app.models.message import (
+    Message,
+    MessageReaction,
+    MessageRecipientState,
+    MessageVisibilityOverride,
+)
 
 
 class MessagesRepository:
@@ -159,6 +164,35 @@ class MessagesRepository:
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+    ) -> Message | None:
+        result = await session.execute(
+            select(Message).where(
+                Message.id == message_id,
+                Message.is_deleted_global.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def is_hidden_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+        user_id: int,
+    ) -> bool:
+        result = await session.execute(
+            select(MessageVisibilityOverride.id).where(
+                MessageVisibilityOverride.message_id == message_id,
+                MessageVisibilityOverride.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def mark_read(
         self,
         session: AsyncSession,
@@ -282,6 +316,65 @@ class MessagesRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_reactions_for_messages(
+        self,
+        session: AsyncSession,
+        *,
+        message_ids: list[int],
+    ) -> list[MessageReaction]:
+        if not message_ids:
+            return []
+
+        result = await session.execute(
+            select(MessageReaction).where(MessageReaction.message_id.in_(message_ids))
+        )
+        return list(result.scalars().all())
+
+    async def upsert_reaction(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+        user_id: int,
+        reaction: str,
+    ) -> MessageReaction:
+        result = await session.execute(
+            select(MessageReaction).where(
+                MessageReaction.message_id == message_id,
+                MessageReaction.user_id == user_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            existing.reaction = reaction
+            await session.flush()
+            return existing
+
+        message_reaction = MessageReaction(
+            message_id=message_id,
+            user_id=user_id,
+            reaction=reaction,
+        )
+        session.add(message_reaction)
+        await session.flush()
+        return message_reaction
+
+    async def delete_reaction(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+        user_id: int,
+    ) -> bool:
+        result = await session.execute(
+            delete(MessageReaction).where(
+                MessageReaction.message_id == message_id,
+                MessageReaction.user_id == user_id,
+            )
+        )
+        await session.flush()
+        return bool(result.rowcount)
 
     async def mark_delivered(
         self,

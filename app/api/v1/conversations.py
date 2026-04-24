@@ -10,11 +10,13 @@ from app.schemas.conversations import (
     ClearConversationRequest,
     ClearConversationResponseData,
     CreateConversationRequest,
+    ConversationSettingsResponseData,
     CreateConversationResponseData,
     GetConversationResponseData,
     ListConversationsResponseData,
     UpdateConversationRequest,
     UpdateConversationResponseData,
+    UpdateConversationSettingsRequest,
 )
 from app.schemas.messages import ListMessagesResponseData
 from app.services.conversation_service import (
@@ -24,6 +26,7 @@ from app.services.conversation_service import (
     get_conversation,
     list_conversations,
     update_conversation,
+    update_conversation_settings,
 )
 from app.services.message_service import list_messages
 
@@ -119,6 +122,27 @@ async def update_conversation_endpoint(
         payload=payload,
     )
     return ApiResponse(data=UpdateConversationResponseData(**data))
+
+
+
+@router.patch(
+    "/{conversation_id}/settings",
+    response_model=ApiResponse[ConversationSettingsResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def update_conversation_settings_endpoint(
+    conversation_id: int,
+    payload: UpdateConversationSettingsRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[ConversationSettingsResponseData]:
+    data = await update_conversation_settings(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        payload=payload,
+    )
+    return ApiResponse(data=ConversationSettingsResponseData(**data))
 
 
 @router.post(

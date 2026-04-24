@@ -1,4 +1,6 @@
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +11,6 @@ from app.models.chat_enums import (
     EncryptionMode,
     EventType,
     MessageType,
-    ProtectionMode,
     VisibilityReason,
 )
 from app.models.device import Device
@@ -23,6 +24,7 @@ from app.schemas.messages import (
     MarkDeliveredRequest,
     MarkReadRequest,
     SendMessageRequest,
+    SetMessageReactionRequest,
 )
 
 conversations_repo = ConversationsRepository()
@@ -136,28 +138,93 @@ def _validate_client_message_payload(payload: SendMessageRequest) -> None:
         )
 
 
-def _validate_encryption_mode_for_conversation(
+def _validate_encryption_mode_for_participant(
     *,
-    protection_mode: ProtectionMode,
+    shared_secret_enabled: bool,
     encryption_mode: EncryptionMode,
 ) -> None:
     if (
-        protection_mode == ProtectionMode.NORMAL
-        and encryption_mode != EncryptionMode.SIGNAL
-    ):
-        raise BadRequestError(
-            code="INVALID_ENCRYPTION_MODE",
-            message="Normal conversation requires signal encryption mode",
-        )
-
-    if (
-        protection_mode == ProtectionMode.SHARED_SECRET
+        shared_secret_enabled
         and encryption_mode != EncryptionMode.SIGNAL_PLUS_SHARED_SECRET
     ):
         raise BadRequestError(
             code="INVALID_ENCRYPTION_MODE",
-            message="Shared secret conversation requires signal_plus_shared_secret encryption mode",
+            message=(
+                "Shared secret chat setting requires signal_plus_shared_secret mode"
+            ),
         )
+
+    if not shared_secret_enabled and encryption_mode != EncryptionMode.SIGNAL:
+        raise BadRequestError(
+            code="INVALID_ENCRYPTION_MODE",
+            message="Normal chat setting requires signal encryption mode",
+        )
+
+
+
+def _build_reaction_summaries(
+    reactions: list[Any],
+    *,
+    current_user_id: int,
+) -> list[dict[str, object]]:
+    summaries: dict[str, dict[str, object]] = {}
+
+    for reaction in reactions:
+        summary = summaries.setdefault(
+            reaction.reaction,
+            {"reaction": reaction.reaction, "count": 0, "me": False},
+        )
+        summary["count"] = int(summary["count"]) + 1
+        if reaction.user_id == current_user_id:
+            summary["me"] = True
+
+    return sorted(
+        summaries.values(),
+        key=lambda item: (-int(item["count"]), str(item["reaction"])),
+    )
+
+
+async def _get_reactable_message(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    message_id: int,
+) -> tuple[Any, Any]:
+    message = await messages_repo.get_by_id(session, message_id=message_id)
+    if message is None:
+        raise NotFoundError(
+            code="MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
+
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=message.conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is None:
+        raise NotFoundError(
+            code="MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    hidden = await messages_repo.is_hidden_for_user(
+        session,
+        message_id=message.id,
+        user_id=current_user.id,
+    )
+    if hidden:
+        raise NotFoundError(
+            code="MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
+
+    return message, conversation
 
 
 async def send_message(
@@ -182,9 +249,20 @@ async def send_message(
         is_purged=conversation.is_purged,
         is_active=conversation.is_active,
     )
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation.id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
     _validate_client_message_payload(payload)
-    _validate_encryption_mode_for_conversation(
-        protection_mode=conversation.protection_mode,
+    _validate_encryption_mode_for_participant(
+        shared_secret_enabled=participant.shared_secret_enabled,
         encryption_mode=payload.encryption_mode,
     )
 
@@ -338,6 +416,7 @@ async def send_message(
             "recipient_user_id": message.recipient_user_id,
             "recipient_device_id": message.recipient_device_id,
             "message_type": message.message_type.value,
+            "encryption_mode": message.encryption_mode.value,
             "has_attachments": message.has_attachments,
             "client_created_at": message.client_created_at.isoformat(),
             "server_received_at": (
@@ -428,6 +507,14 @@ async def list_messages(
     )
 
     ordered_messages = list(reversed(messages))
+    message_ids = [message.id for message in ordered_messages]
+    reactions = await messages_repo.list_reactions_for_messages(
+        session,
+        message_ids=message_ids,
+    )
+    reactions_by_message_id: dict[int, list[Any]] = defaultdict(list)
+    for reaction in reactions:
+        reactions_by_message_id[reaction.message_id].append(reaction)
 
     items: list[dict] = []
     for message in ordered_messages:
@@ -449,6 +536,10 @@ async def list_messages(
                 "read_at": message.read_at,
                 "expires_at": message.expires_at,
                 "has_attachments": message.has_attachments,
+                "reactions": _build_reaction_summaries(
+                    reactions_by_message_id[message.id],
+                    current_user_id=current_user.id,
+                ),
             }
         )
 
@@ -750,6 +841,148 @@ async def delete_global(
         "scope": "global",
         "message_ids": deleted_ids,
     }
+
+
+async def set_message_reaction(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    message_id: int,
+    payload: SetMessageReactionRequest,
+) -> dict:
+    message, conversation = await _get_reactable_message(
+        session,
+        current_user=current_user,
+        message_id=message_id,
+    )
+
+    reaction = await messages_repo.upsert_reaction(
+        session,
+        message_id=message.id,
+        user_id=current_user.id,
+        reaction=payload.reaction,
+    )
+
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=message.conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=current_device.id,
+        event_type=EventType.MESSAGE_REACTION_SET,
+        target_message_id=message.id,
+        payload={
+            "message_id": message.id,
+            "user_id": current_user.id,
+            "reaction": reaction.reaction,
+        },
+    )
+
+    await session.commit()
+
+    peer_user_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+
+    audit_log(
+        "message_reaction_set",
+        user_id=current_user.id,
+        device_id=current_device.id,
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+        extra={"reaction": reaction.reaction},
+    )
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=message.conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(
+        message.conversation_id, realtime_payload
+    )
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+
+    return {
+        "message_id": message.id,
+        "reaction": reaction.reaction,
+        "updated": True,
+    }
+
+
+async def delete_message_reaction(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    message_id: int,
+) -> dict:
+    message, conversation = await _get_reactable_message(
+        session,
+        current_user=current_user,
+        message_id=message_id,
+    )
+
+    removed = await messages_repo.delete_reaction(
+        session,
+        message_id=message.id,
+        user_id=current_user.id,
+    )
+
+    if not removed:
+        return {"message_id": message.id, "removed": False}
+
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=message.conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=current_device.id,
+        event_type=EventType.MESSAGE_REACTION_REMOVED,
+        target_message_id=message.id,
+        payload={"message_id": message.id, "user_id": current_user.id},
+    )
+
+    await session.commit()
+
+    peer_user_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+
+    audit_log(
+        "message_reaction_removed",
+        user_id=current_user.id,
+        device_id=current_device.id,
+        conversation_id=message.conversation_id,
+        message_id=message.id,
+    )
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=message.conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(
+        message.conversation_id, realtime_payload
+    )
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+
+    return {"message_id": message.id, "removed": True}
 
 
 async def mark_delivered(

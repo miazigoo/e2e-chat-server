@@ -8,6 +8,7 @@ from app.models.device import Device
 from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.messages import (
+    DeleteMessageReactionResponseData,
     DeleteMessagesRequest,
     DeleteMessagesResponseData,
     ListMessagesResponseData,
@@ -17,14 +18,18 @@ from app.schemas.messages import (
     MarkReadResponseData,
     SendMessageRequest,
     SendMessageResponseData,
+    SetMessageReactionRequest,
+    SetMessageReactionResponseData,
 )
 from app.services.message_service import (
     delete_global,
     delete_local,
+    delete_message_reaction,
     list_messages,
     mark_delivered,
     mark_read,
     send_message,
+    set_message_reaction,
 )
 
 router = APIRouter()
@@ -144,3 +149,44 @@ async def delete_global_endpoint(
         payload=payload,
     )
     return ApiResponse(data=DeleteMessagesResponseData(**result))
+
+
+
+@router.post(
+    "/{message_id}/reaction",
+    response_model=ApiResponse[SetMessageReactionResponseData],
+)
+async def set_message_reaction_endpoint(
+    message_id: int,
+    payload: SetMessageReactionRequest,
+    current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[SetMessageReactionResponseData]:
+    result = await set_message_reaction(
+        session,
+        current_user=current_user,
+        current_device=current_device,
+        message_id=message_id,
+        payload=payload,
+    )
+    return ApiResponse(data=SetMessageReactionResponseData(**result))
+
+
+@router.delete(
+    "/{message_id}/reaction",
+    response_model=ApiResponse[DeleteMessageReactionResponseData],
+)
+async def delete_message_reaction_endpoint(
+    message_id: int,
+    current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[DeleteMessageReactionResponseData]:
+    result = await delete_message_reaction(
+        session,
+        current_user=current_user,
+        current_device=current_device,
+        message_id=message_id,
+    )
+    return ApiResponse(data=DeleteMessageReactionResponseData(**result))

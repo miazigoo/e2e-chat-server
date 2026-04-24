@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.chat_enums import ProtectionMode
 
@@ -23,6 +23,23 @@ class ClearConversationRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=255)
 
 
+class UpdateConversationSettingsRequest(BaseModel):
+    shared_secret_enabled: bool | None = None
+    shared_secret_fingerprint: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=128,
+    )
+
+    @model_validator(mode="after")
+    def validate_shared_secret(self) -> "UpdateConversationSettingsRequest":
+        if self.shared_secret_enabled is True and not self.shared_secret_fingerprint:
+            raise ValueError(
+                "shared_secret_fingerprint is required when shared secret is enabled"
+            )
+        return self
+
+
 class CreateConversationResponseData(BaseModel):
     conversation_id: int
     conversation_uuid: str
@@ -38,6 +55,10 @@ class GetConversationResponseData(BaseModel):
     protection_mode: str
     message_ttl_days: int | None = None
     delete_after_read_seconds: int | None = None
+    shared_secret_enabled: bool = False
+    shared_secret_fingerprint: str | None = None
+    shared_secret_updated_at: datetime | None = None
+    peer_shared_secret_enabled: bool = False
     is_active: bool
     is_purged: bool
 
@@ -45,6 +66,14 @@ class GetConversationResponseData(BaseModel):
 class UpdateConversationResponseData(BaseModel):
     conversation_id: int
     updated: bool
+
+
+class ConversationSettingsResponseData(BaseModel):
+    conversation_id: int
+    user_id: int
+    shared_secret_enabled: bool
+    shared_secret_fingerprint: str | None = None
+    shared_secret_updated_at: datetime | None = None
 
 
 class ClearConversationResponseData(BaseModel):
@@ -79,6 +108,10 @@ class ConversationListItemSchema(BaseModel):
     protection_mode: ProtectionMode
     message_ttl_days: int | None = None
     delete_after_read_seconds: int | None = None
+    shared_secret_enabled: bool = False
+    shared_secret_fingerprint: str | None = None
+    shared_secret_updated_at: datetime | None = None
+    peer_shared_secret_enabled: bool = False
     is_active: bool
     is_purged: bool
     updated_at: datetime
