@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_log
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
+from app.core.task_dispatch import dispatch_background_task
 from app.models.chat_enums import EventType
 from app.models.message import Message
 from app.models.user import User
@@ -37,10 +38,15 @@ def _now() -> datetime:
 def _enqueue_recompute_unread(user_id: int) -> None:
     try:
         from app.worker.tasks import recompute_unread_counters_for_user_task
-
-        recompute_unread_counters_for_user_task.delay(user_id)
     except Exception:
         return
+
+    dispatch_background_task(
+        task_name="recompute_unread_counters_for_user_task",
+        dispatcher=recompute_unread_counters_for_user_task.delay,
+        args=(user_id,),
+        extra={"user_id": user_id},
+    )
 
 
 def _peer_user_id(

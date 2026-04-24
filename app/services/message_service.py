@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import audit_log
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
+from app.core.task_dispatch import dispatch_background_task
 from app.models.chat_enums import (
     EncryptionMode,
     EventType,
@@ -45,19 +46,33 @@ def _enqueue_push_notification(
 ) -> None:
     try:
         from app.worker.tasks import send_new_message_push_task
-
-        send_new_message_push_task.delay(user_id, conversation_id, message_id)
     except Exception:
         return
+
+    dispatch_background_task(
+        task_name="send_new_message_push_task",
+        dispatcher=send_new_message_push_task.delay,
+        args=(user_id, conversation_id, message_id),
+        extra={
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        },
+    )
 
 
 def _enqueue_recompute_unread(user_id: int) -> None:
     try:
         from app.worker.tasks import recompute_unread_counters_for_user_task
-
-        recompute_unread_counters_for_user_task.delay(user_id)
     except Exception:
         return
+
+    dispatch_background_task(
+        task_name="recompute_unread_counters_for_user_task",
+        dispatcher=recompute_unread_counters_for_user_task.delay,
+        args=(user_id,),
+        extra={"user_id": user_id},
+    )
 
 
 def _other_participant_id(

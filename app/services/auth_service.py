@@ -25,6 +25,7 @@ from app.core.security import (
     hash_token,
     verify_password,
 )
+from app.core.task_dispatch import dispatch_background_task
 from app.models.auth_session import AuthSession
 from app.models.device import Device
 from app.repositories.auth import AuthRepository
@@ -47,11 +48,15 @@ devices_repo = DevicesRepository()
 def _enqueue_purge_account(user_id: int, reason: str) -> None:
     try:
         from app.worker.tasks import purge_account_task
-
-        purge_account_task.delay(user_id, reason)
     except Exception:
-        # fail-safe: account already gets frozen/pending_deletion
         return
+
+    dispatch_background_task(
+        task_name="purge_account_task",
+        dispatcher=purge_account_task.delay,
+        args=(user_id, reason),
+        extra={"user_id": user_id, "reason": reason},
+    )
 
 
 def _now() -> datetime:

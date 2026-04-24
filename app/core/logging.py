@@ -18,6 +18,8 @@ class JsonFormatter(logging.Formatter):
         "conversation_id",
         "message_id",
         "event",
+        "task_name",
+        "reason",
         "code",
         "path",
         "method",
