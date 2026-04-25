@@ -689,10 +689,12 @@ def test_build_reaction_summaries_marks_my_reaction() -> None:
         SimpleNamespace(reaction="❤️", user_id=2),
     ]
 
-    assert message_service._build_reaction_summaries(  # noqa: SLF001
+    summaries = message_service._build_reaction_summaries(  # noqa: SLF001
         reactions,
         current_user_id=1,
-    ) == [
+    )
+
+    assert [summary.model_dump() for summary in summaries] == [
         {"reaction": "👍", "count": 2, "me": True},
         {"reaction": "❤️", "count": 1, "me": False},
     ]

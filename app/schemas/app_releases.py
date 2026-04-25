@@ -16,7 +16,10 @@ class AppReleaseDetailsSchema(BaseModel):
         default=None,
         description="Optional release notes for the published version.",
     )
-    content_type: str = Field(description="Stored APK content type.")
+    content_type: str | None = Field(
+        default=None,
+        description="Stored APK content type.",
+    )
     uploaded_at: datetime = Field(description="Release publication timestamp.")
 
 

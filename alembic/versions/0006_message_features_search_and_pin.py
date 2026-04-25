@@ -1,14 +1,14 @@
 """message features search and pin
 
-Revision ID: 0006_message_features_search_and_pin
-Revises: 0005_user_profiles_and_app_releases
+Revision ID: 0006_message_features
+Revises: 0005_user_profiles_app
 Create Date: 2026-04-25 00:30:00
 """
 
 from alembic import op
 
-revision = "0006_message_features_search_and_pin"
-down_revision = "0005_user_profiles_and_app_releases"
+revision = "0006_message_features"
+down_revision = "0005_user_profiles_app"
 branch_labels = None
 depends_on = None
 

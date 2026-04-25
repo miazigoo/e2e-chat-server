@@ -1,13 +1,13 @@
 """user profiles and app releases
 
-Revision ID: 0005_user_profiles_and_app_releases
+Revision ID: 0005_user_profiles_app
 Revises: 0004_signal_registration_fields
 Create Date: 2026-04-25 00:00:00
 """
 
 from alembic import op
 
-revision = "0005_user_profiles_and_app_releases"
+revision = "0005_user_profiles_app"
 down_revision = "0004_signal_registration_fields"
 branch_labels = None
 depends_on = None

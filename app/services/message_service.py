@@ -106,12 +106,14 @@ def _resolve_expires_at(
     *,
     explicit_expires_at: datetime | None,
     conversation_ttl_days: int | None,
+    now_dt: datetime | None = None,
 ) -> datetime:
     if explicit_expires_at is not None:
         return explicit_expires_at
 
+    reference_now = now_dt or _now()
     ttl_days = conversation_ttl_days or 60
-    return _now() + timedelta(days=ttl_days)
+    return reference_now + timedelta(days=ttl_days)
 
 
 def _event_to_realtime_payload(
@@ -482,6 +484,7 @@ async def send_message(
     expires_at = _resolve_expires_at(
         explicit_expires_at=payload.expires_at,
         conversation_ttl_days=conversation.message_ttl_days,
+        now_dt=now_dt,
     )
 
     if expires_at <= now_dt:
@@ -874,6 +877,7 @@ async def forward_messages(
         expires_at = _resolve_expires_at(
             explicit_expires_at=None,
             conversation_ttl_days=conversation.message_ttl_days,
+            now_dt=client_created_at,
         )
         forwarded_message = await messages_repo.create_message(
             session,

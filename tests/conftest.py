@@ -1,9 +1,28 @@
+import os
 from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/test_db",
+)
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
+os.environ.setdefault("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "test-secret-key-test-secret-key-1234",
+)
+os.environ.setdefault("MINIO_ENDPOINT", "localhost:9000")
+os.environ.setdefault("MINIO_ACCESS_KEY", "test-access-key")
+os.environ.setdefault("MINIO_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("MINIO_BUCKET_ATTACHMENTS", "test-attachments")
+os.environ.setdefault("MINIO_BUCKET_TEMP", "test-temp")
+os.environ.setdefault("MINIO_BUCKET_ASSETS", "test-assets")
+os.environ.setdefault("APK_UPLOAD_TOKEN", "test-apk-upload-token")
+
+from app.main import app  # noqa: E402
 
 
 class DummyPipeline:

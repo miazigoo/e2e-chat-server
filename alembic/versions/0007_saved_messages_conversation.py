@@ -1,14 +1,14 @@
 """saved messages conversation
 
-Revision ID: 0007_saved_messages_conversation
-Revises: 0006_message_features_search_and_pin
+Revision ID: 0007_saved_messages
+Revises: 0006_message_features
 Create Date: 2026-04-25 02:00:00
 """
 
 from alembic import op
 
-revision = "0007_saved_messages_conversation"
-down_revision = "0006_message_features_search_and_pin"
+revision = "0007_saved_messages"
+down_revision = "0006_message_features"
 branch_labels = None
 depends_on = None
 
