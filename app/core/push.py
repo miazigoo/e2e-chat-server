@@ -75,10 +75,20 @@ def build_app_update_push_payload(
     *,
     version_name: str,
     version_code: int,
+    file_name: str,
+    file_size: int,
+    sha256: str,
+    uploaded_at: str,
+    changelog: str | None,
 ) -> dict[str, str]:
     return {
         "type": "app_update_available",
         "platform": "android",
         "version_name": version_name,
         "version_code": str(version_code),
+        "file_name": file_name,
+        "file_size": str(file_size),
+        "sha256": sha256,
+        "uploaded_at": uploaded_at,
+        "changelog": changelog or "",
     }

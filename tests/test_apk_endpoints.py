@@ -145,3 +145,35 @@ def test_get_latest_apk_endpoint(
     body = response.json()
     assert body["data"]["version_name"] == "1.2.3"
     assert body["data"]["download_url"] == "https://example.com/chat.apk"
+
+
+def test_check_apk_version_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_check_android_apk_update(
+        session: Any,
+        *,
+        current_version_code: int,
+    ) -> dict[str, Any]:
+        assert current_version_code == 120
+        latest = _latest_payload()
+        return {
+            "current_version_code": 120,
+            "latest_version_code": 123,
+            "update_available": True,
+            "release": latest,
+        }
+
+    monkeypatch.setattr(
+        "app.api.v1.files.check_android_apk_update",
+        fake_check_android_apk_update,
+    )
+
+    response = client.get("/api/v1/files/apk/check?version_code=120")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["update_available"] is True
+    assert body["data"]["latest_version_code"] == 123
+    assert body["data"]["release"]["version_name"] == "1.2.3"

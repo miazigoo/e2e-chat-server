@@ -508,6 +508,93 @@ Response:
 }
 
 ```
+
+### Android APK releases
+#### Upload new APK release
+`POST /api/v1/files/apk/upload`
+
+No JWT auth is required. Pass the release token using one of:
+- multipart form field `token`
+- header `X-APK-Upload-Token`
+- query param `token`
+
+Multipart fields:
+- `version_name`
+- `version_code`
+- `changelog` (optional)
+- `file` (`.apk`)
+
+Example:
+```bash
+curl -X POST http://localhost:8000/api/v1/files/apk/upload \
+  -H "X-APK-Upload-Token: <apk_upload_token>" \
+  -F "version_name=1.2.3" \
+  -F "version_code=123" \
+  -F "changelog=Bug fixes and performance improvements" \
+  -F "file=@app-release.apk;type=application/vnd.android.package-archive"
+```
+
+#### Get latest APK metadata
+`GET /api/v1/files/apk/latest`
+
+#### Check client version against latest APK
+`GET /api/v1/files/apk/check?version_code=120`
+
+Example response:
+```json
+{
+  "ok": true,
+  "data": {
+    "current_version_code": 120,
+    "latest_version_code": 123,
+    "update_available": true,
+    "release": {
+      "platform": "android",
+      "version_name": "1.2.3",
+      "version_code": 123,
+      "file_name": "app-release.apk",
+      "file_size": 73400320,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "changelog": "Bug fixes and performance improvements",
+      "content_type": "application/vnd.android.package-archive",
+      "uploaded_at": "2026-04-25T12:00:00+00:00",
+      "download_url": "https://minio-presigned-get-url",
+      "download_url_expires_in": 300
+    }
+  },
+  "meta": {}
+}
+```
+
+---
+## User profile
+### Get my profile
+`GET /api/v1/users/me`
+
+### Update my profile
+`PATCH /api/v1/users/me`
+```json
+{
+  "full_name": "Alice Example",
+  "bio": "Android user",
+  "language_code": "ru",
+  "theme": "dark",
+  "push_notifications_enabled": true,
+  "apk_update_notifications_enabled": true
+}
+```
+
+### Upload avatar
+`POST /api/v1/users/me/avatar`
+
+Multipart field:
+- `file` image file
+
+### Delete avatar
+`DELETE /api/v1/users/me/avatar`
+
+### Get another user's public profile
+`GET /api/v1/users/{user_id}/profile`
 ---
 ## Messages
 ### Send message
@@ -673,6 +760,23 @@ X-Device-UUID: <device_uuid>
   }
 }
 
+```
+#### App update available
+```json
+{
+  "type": "app_update_available",
+  "release": {
+    "platform": "android",
+    "version_name": "1.2.3",
+    "version_code": 123,
+    "file_name": "app-release.apk",
+    "file_size": 73400320,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "changelog": "Bug fixes and performance improvements",
+    "content_type": "application/vnd.android.package-archive",
+    "uploaded_at": "2026-04-25T12:00:00+00:00"
+  }
+}
 ```
 ### Error
 ```json

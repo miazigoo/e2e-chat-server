@@ -11,9 +11,15 @@ from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.push import build_app_update_push_payload, send_push_data_message
 from app.core.realtime import realtime_hub
 from app.core.storage import build_presigned_get_url, upload_bytes
+from app.models.app_release import AppRelease
 from app.repositories.app_releases import AppReleasesRepository
 from app.repositories.devices import DevicesRepository
-from app.schemas.app_releases import ApkUploadResponseData, LatestAppReleaseResponseData
+from app.schemas.app_releases import (
+    ApkUploadResponseData,
+    AppReleaseDetailsSchema,
+    AppVersionCheckResponseData,
+    LatestAppReleaseResponseData,
+)
 
 app_releases_repo = AppReleasesRepository()
 devices_repo = DevicesRepository()
@@ -32,6 +38,33 @@ def _validate_apk_upload_token(token: str | None) -> None:
             code="INVALID_APK_UPLOAD_TOKEN",
             message="APK upload token is invalid",
         )
+
+
+def _build_release_details(release: AppRelease) -> AppReleaseDetailsSchema:
+    return AppReleaseDetailsSchema(
+        platform=release.platform,
+        version_name=release.version_name,
+        version_code=release.version_code,
+        file_name=release.file_name,
+        file_size=release.file_size,
+        sha256=release.sha256,
+        changelog=release.changelog,
+        content_type=release.content_type,
+        uploaded_at=release.created_at,
+    )
+
+
+async def _get_latest_release_or_404(session: AsyncSession) -> AppRelease:
+    release = await app_releases_repo.get_active_for_platform(
+        session,
+        platform=ANDROID_PLATFORM,
+    )
+    if release is None:
+        raise NotFoundError(
+            code="APK_RELEASE_NOT_FOUND",
+            message="No active APK release found",
+        )
+    return release
 
 
 async def upload_android_apk_release(
@@ -101,16 +134,21 @@ async def upload_android_apk_release(
     await session.commit()
 
     notified_devices = 0
+    release_details = _build_release_details(release)
     realtime_payload = {
         "type": "app_update_available",
-        "platform": ANDROID_PLATFORM,
-        "version_name": release.version_name,
-        "version_code": release.version_code,
-        "uploaded_at": release.created_at.isoformat(),
+        "release": {
+            **release_details.model_dump(mode="json"),
+        },
     }
     push_payload = build_app_update_push_payload(
         version_name=release.version_name,
         version_code=release.version_code,
+        file_name=release.file_name,
+        file_size=release.file_size,
+        sha256=release.sha256,
+        uploaded_at=release.created_at.isoformat(),
+        changelog=release.changelog,
     )
 
     for device in devices:
@@ -119,13 +157,7 @@ async def upload_android_apk_release(
             notified_devices += 1
 
     return ApkUploadResponseData(
-        platform=release.platform,
-        version_name=release.version_name,
-        version_code=release.version_code,
-        file_name=release.file_name,
-        file_size=release.file_size,
-        sha256=release.sha256,
-        uploaded_at=release.created_at,
+        **release_details.model_dump(),
         notified_devices=notified_devices,
     )
 
@@ -133,30 +165,35 @@ async def upload_android_apk_release(
 async def get_latest_android_apk_release(
     session: AsyncSession,
 ) -> LatestAppReleaseResponseData:
-    release = await app_releases_repo.get_active_for_platform(
-        session,
-        platform=ANDROID_PLATFORM,
-    )
-    if release is None:
-        raise NotFoundError(
-            code="APK_RELEASE_NOT_FOUND",
-            message="No active APK release found",
-        )
-
+    release = await _get_latest_release_or_404(session)
     download_url = await build_presigned_get_url(
         bucket_name=release.bucket_name,
         object_name=release.storage_key,
     )
     return LatestAppReleaseResponseData(
-        platform=release.platform,
-        version_name=release.version_name,
-        version_code=release.version_code,
-        file_name=release.file_name,
-        file_size=release.file_size,
-        sha256=release.sha256,
-        changelog=release.changelog,
-        content_type=release.content_type,
-        uploaded_at=release.created_at,
+        **_build_release_details(release).model_dump(),
         download_url=download_url,
         download_url_expires_in=settings.presigned_download_expire_seconds,
+    )
+
+
+async def check_android_apk_update(
+    session: AsyncSession,
+    *,
+    current_version_code: int,
+) -> AppVersionCheckResponseData:
+    release = await _get_latest_release_or_404(session)
+    latest_release = LatestAppReleaseResponseData(
+        **_build_release_details(release).model_dump(),
+        download_url=await build_presigned_get_url(
+            bucket_name=release.bucket_name,
+            object_name=release.storage_key,
+        ),
+        download_url_expires_in=settings.presigned_download_expire_seconds,
+    )
+    return AppVersionCheckResponseData(
+        current_version_code=current_version_code,
+        latest_version_code=release.version_code,
+        update_available=current_version_code < release.version_code,
+        release=latest_release,
     )

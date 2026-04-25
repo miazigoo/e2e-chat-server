@@ -29,8 +29,18 @@ def test_build_app_update_push_payload() -> None:
     payload = build_app_update_push_payload(
         version_name="1.2.3",
         version_code=123,
+        file_name="chat.apk",
+        file_size=1024,
+        sha256="a" * 64,
+        uploaded_at="2026-04-25T12:00:00+00:00",
+        changelog="Bug fixes",
     )
     assert payload["type"] == "app_update_available"
     assert payload["platform"] == "android"
     assert payload["version_name"] == "1.2.3"
     assert payload["version_code"] == "123"
+    assert payload["file_name"] == "chat.apk"
+    assert payload["file_size"] == "1024"
+    assert payload["sha256"] == "a" * 64
+    assert payload["uploaded_at"] == "2026-04-25T12:00:00+00:00"
+    assert payload["changelog"] == "Bug fixes"
