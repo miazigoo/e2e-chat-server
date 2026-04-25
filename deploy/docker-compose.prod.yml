@@ -187,6 +187,8 @@ services:
     volumes:
       - ./secrets/fcm_service_account.json:/run/secrets/fcm_service_account.json:ro
     command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -221,6 +223,8 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=INFO"]
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy

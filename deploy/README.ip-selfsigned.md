@@ -5,22 +5,12 @@ This mode is intended for a private Android client that talks to the backend by 
 ## What it does
 
 - serves only `https://<SERVER_IP>` and `wss://<SERVER_IP>/api/v1/ws`
-- uses a private root CA and a server certificate with the IP in SAN
-- requires the Android client to trust `deploy/certs/ca.crt` or pin the server certificate/public key
+- uses Caddy's internal private CA for the IP certificate
+- requires the Android client to trust the generated root CA or pin the server certificate/public key
 
-## 1. Generate certificates
+## 1. Start Caddy in IP-only mode
 
-Run on the server or locally before copying deploy files:
-
-```bash
-bash deploy/scripts/generate_ip_cert.sh <SERVER_IP>
-```
-
-Generated files:
-
-- `deploy/certs/ca.crt`
-- `deploy/certs/server.crt`
-- `deploy/certs/server.key`
+No manual certificate generation is required. Caddy issues a certificate for the configured IP from its internal CA on first start.
 
 ## 2. Configure `.env`
 
@@ -60,8 +50,16 @@ This is **not** `google-services.json`.
 docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 ```
 
-## 5. Android trust
+## 5. Export the root CA for Android trust
 
-The Android app must trust `deploy/certs/ca.crt` or use certificate/public-key pinning.
+After the first successful start, copy the root CA from the Caddy container:
+
+```bash
+docker cp secure_chat_caddy:/data/caddy/pki/authorities/local/root.crt ./deploy/certs/caddy-root-ca.crt
+```
+
+## 6. Android trust
+
+The Android app must trust `deploy/certs/caddy-root-ca.crt` or use certificate/public-key pinning.
 
 Without this, default Android TLS verification will reject the connection even though the server is using HTTPS/WSS.

@@ -13,9 +13,8 @@ https://{$SERVER_IP} {
         Strict-Transport-Security "max-age=31536000"
     }
 
-    tls /certs/server.crt /certs/server.key
+    tls internal
 
-    # Caddy terminates HTTPS/WSS and proxies both REST and WebSocket traffic to FastAPI.
     reverse_proxy api:8000
 
     log {
