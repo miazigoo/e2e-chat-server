@@ -122,6 +122,27 @@ async def move_object(
     await anyio.to_thread.run_sync(_op)
 
 
+async def copy_object(
+    *,
+    src_bucket_name: str,
+    src_object_name: str,
+    dst_bucket_name: str,
+    dst_object_name: str,
+) -> None:
+    def _op() -> None:
+        try:
+            client = _get_minio_client_sync()
+            client.copy_object(
+                bucket_name=dst_bucket_name,
+                object_name=dst_object_name,
+                source=CopySource(src_bucket_name, src_object_name),
+            )
+        except Exception as exc:
+            _raise_storage_unavailable("copy_object", exc)
+
+    await anyio.to_thread.run_sync(_op)
+
+
 async def delete_object_if_exists(
     *,
     bucket_name: str,

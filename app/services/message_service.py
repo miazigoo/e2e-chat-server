@@ -1,12 +1,14 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypedDict
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import audit_log
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
+from app.core.storage import copy_object
 from app.core.task_dispatch import dispatch_background_task
 from app.models.chat_enums import (
     EncryptionMode,
@@ -22,10 +24,18 @@ from app.repositories.files import FilesRepository
 from app.repositories.messages import MessagesRepository
 from app.schemas.messages import (
     DeleteMessagesRequest,
+    ForwardMessagesRequest,
     MarkDeliveredRequest,
     MarkReadRequest,
+    MessageListItemSchema,
+    MessagePreviewSchema,
+    MessageReactionSummarySchema,
+    PinMessageResponseData,
+    SearchMessagesResponseData,
     SendMessageRequest,
     SetMessageReactionRequest,
+    SharedMessagesResponseData,
+    SharedTabCountsSchema,
 )
 
 conversations_repo = ConversationsRepository()
@@ -186,7 +196,7 @@ def _build_reaction_summaries(
     reactions: list[Any],
     *,
     current_user_id: int,
-) -> list[dict[str, object]]:
+) -> list[MessageReactionSummarySchema]:
     summaries: dict[str, ReactionSummary] = {}
 
     for reaction in reactions:
@@ -200,7 +210,11 @@ def _build_reaction_summaries(
             summary["me"] = True
 
     return [
-        dict(item)
+        MessageReactionSummarySchema(
+            reaction=str(item["reaction"]),
+            count=int(item["count"]),
+            me=bool(item["me"]),
+        )
         for item in sorted(
             summaries.values(),
             key=lambda item: (-item["count"], item["reaction"]),
@@ -249,6 +263,115 @@ async def _get_reactable_message(
         )
 
     return message, conversation
+
+
+def _preview_from_message(message: Any) -> MessagePreviewSchema:
+    return MessagePreviewSchema(
+        message_id=message.id,
+        message_uuid=message.message_uuid,
+        sender_user_id=message.sender_user_id,
+        message_type=message.message_type,
+        ciphertext=message.ciphertext,
+        has_attachments=message.has_attachments,
+        client_created_at=message.client_created_at,
+    )
+
+
+async def _build_message_items(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    messages: list[Any],
+) -> list[MessageListItemSchema]:
+    if not messages:
+        return []
+
+    message_ids = [message.id for message in messages]
+    reactions = await messages_repo.list_reactions_for_messages(
+        session,
+        message_ids=message_ids,
+    )
+    reactions_by_message_id: dict[int, list[Any]] = defaultdict(list)
+    for reaction in reactions:
+        reactions_by_message_id[reaction.message_id].append(reaction)
+
+    preview_ids = {
+        preview_id
+        for message in messages
+        for preview_id in (message.reply_to_message_id, message.forward_from_message_id)
+        if preview_id is not None
+    }
+    previews_by_id: dict[int, Any] = {}
+    if preview_ids:
+        previews = await messages_repo.list_by_ids(
+            session,
+            message_ids=list(preview_ids),
+        )
+        previews_by_id = {message.id: message for message in previews}
+
+    return [
+        MessageListItemSchema(
+            message_id=message.id,
+            message_uuid=message.message_uuid,
+            sender_user_id=message.sender_user_id,
+            recipient_user_id=message.recipient_user_id,
+            message_type=message.message_type,
+            ciphertext=message.ciphertext,
+            ciphertext_version=message.ciphertext_version,
+            encryption_mode=message.encryption_mode,
+            nonce=message.nonce,
+            aad_hash=message.aad_hash,
+            client_created_at=message.client_created_at,
+            server_received_at=message.server_received_at,
+            delivered_at=message.delivered_at,
+            read_at=message.read_at,
+            expires_at=message.expires_at,
+            has_attachments=message.has_attachments,
+            reply_to_message_id=message.reply_to_message_id,
+            forward_from_message_id=message.forward_from_message_id,
+            reply_preview=(
+                _preview_from_message(previews_by_id[message.reply_to_message_id])
+                if message.reply_to_message_id in previews_by_id
+                else None
+            ),
+            forward_preview=(
+                _preview_from_message(previews_by_id[message.forward_from_message_id])
+                if message.forward_from_message_id in previews_by_id
+                else None
+            ),
+            reactions=_build_reaction_summaries(
+                reactions_by_message_id[message.id],
+                current_user_id=current_user.id,
+            ),
+        )
+        for message in messages
+    ]
+
+
+async def _clone_forward_attachments(
+    session: AsyncSession,
+    *,
+    source_message_id: int,
+    target_message_id: int,
+) -> None:
+    source_attachments = await files_repo.list_by_message_id(
+        session,
+        message_id=source_message_id,
+    )
+    for attachment in source_attachments:
+        storage_key = f"attachments/forwards/{target_message_id}/{uuid4()}"
+        await copy_object(
+            src_bucket_name=attachment.bucket_name,
+            src_object_name=attachment.storage_key,
+            dst_bucket_name=attachment.bucket_name,
+            dst_object_name=storage_key,
+        )
+        await files_repo.clone_attachment(
+            session,
+            source_attachment=attachment,
+            message_id=target_message_id,
+            storage_key=storage_key,
+        )
 
 
 async def send_message(
@@ -400,6 +523,7 @@ async def send_message(
         recipient_device_id=recipient_device.id,
         message_uuid=payload.message_uuid,
         reply_to_message_id=payload.reply_to_message_id,
+        forward_from_message_id=None,
         message_type=payload.message_type,
         ciphertext=payload.ciphertext,
         ciphertext_version=payload.ciphertext_version,
@@ -437,6 +561,8 @@ async def send_message(
             "message_id": message.id,
             "message_uuid": message.message_uuid,
             "attachment_ids": payload.attachment_ids,
+            "reply_to_message_id": message.reply_to_message_id,
+            "forward_from_message_id": None,
             "sender_user_id": message.sender_user_id,
             "sender_device_id": message.sender_device_id,
             "recipient_user_id": message.recipient_user_id,
@@ -533,43 +659,435 @@ async def list_messages(
     )
 
     ordered_messages = list(reversed(messages))
-    message_ids = [message.id for message in ordered_messages]
-    reactions = await messages_repo.list_reactions_for_messages(
-        session,
-        message_ids=message_ids,
-    )
-    reactions_by_message_id: dict[int, list[Any]] = defaultdict(list)
-    for reaction in reactions:
-        reactions_by_message_id[reaction.message_id].append(reaction)
+    return {
+        "items": await _build_message_items(
+            session,
+            current_user=current_user,
+            messages=ordered_messages,
+        )
+    }
 
-    items: list[dict] = []
-    for message in ordered_messages:
-        items.append(
+
+async def search_messages(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    conversation_id: int,
+    query: str,
+    limit: int,
+) -> SearchMessagesResponseData:
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    normalized_query = query.strip()
+    if not normalized_query:
+        return SearchMessagesResponseData(
+            conversation_id=conversation_id,
+            query="",
+            items=[],
+        )
+
+    messages = await messages_repo.search_in_conversation_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        query=normalized_query,
+        limit=limit,
+        cleared_at=participant.cleared_at,
+    )
+
+    return SearchMessagesResponseData(
+        conversation_id=conversation_id,
+        query=normalized_query,
+        items=await _build_message_items(
+            session,
+            current_user=current_user,
+            messages=messages,
+        ),
+    )
+
+
+async def list_shared_messages(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    conversation_id: int,
+    tab: str,
+    before_message_id: int | None,
+    limit: int,
+) -> SharedMessagesResponseData:
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    normalized_tab = tab.strip().lower()
+    if normalized_tab not in {"media", "links", "files"}:
+        raise BadRequestError(
+            code="INVALID_SHARED_TAB",
+            message="tab must be one of: media, links, files",
+        )
+
+    messages = await messages_repo.list_shared_messages_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        tab=normalized_tab,
+        before_message_id=before_message_id,
+        limit=limit,
+        cleared_at=participant.cleared_at,
+    )
+    counts = await messages_repo.get_shared_counts_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        cleared_at=participant.cleared_at,
+    )
+
+    return SharedMessagesResponseData(
+        conversation_id=conversation_id,
+        tab=normalized_tab,
+        counts=SharedTabCountsSchema(**counts),
+        items=await _build_message_items(
+            session,
+            current_user=current_user,
+            messages=messages,
+        ),
+    )
+
+
+async def forward_messages(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    payload: ForwardMessagesRequest,
+) -> dict[str, Any]:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=payload.conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    expected_recipient_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+    if payload.recipient_user_id != expected_recipient_id:
+        raise BadRequestError(
+            code="INVALID_RECIPIENT",
+            message="Recipient does not belong to conversation",
+        )
+
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation.id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    recipient_device = await devices_repo.get_active_by_user_id(
+        session,
+        user_id=payload.recipient_user_id,
+    )
+    if recipient_device is None:
+        raise ConflictError(
+            code="RECIPIENT_DEVICE_NOT_READY",
+            message="Recipient has no active device",
+        )
+
+    client_created_at = payload.client_created_at or _now()
+    if client_created_at > _now() + timedelta(minutes=5):
+        raise BadRequestError(
+            code="INVALID_CLIENT_CREATED_AT",
+            message="client_created_at is too far in the future",
+        )
+
+    created_items: list[dict[str, Any]] = []
+    realtime_payloads: list[dict[str, Any]] = []
+
+    for source_message_id in payload.message_ids:
+        source_message, _ = await _get_reactable_message(
+            session,
+            current_user=current_user,
+            message_id=source_message_id,
+        )
+
+        expires_at = _resolve_expires_at(
+            explicit_expires_at=None,
+            conversation_ttl_days=conversation.message_ttl_days,
+        )
+        forwarded_message = await messages_repo.create_message(
+            session,
+            conversation_id=conversation.id,
+            sender_user_id=current_user.id,
+            sender_device_id=current_device.id,
+            recipient_user_id=payload.recipient_user_id,
+            recipient_device_id=recipient_device.id,
+            message_uuid=str(uuid4()),
+            reply_to_message_id=None,
+            forward_from_message_id=source_message.id,
+            message_type=source_message.message_type,
+            ciphertext=source_message.ciphertext,
+            ciphertext_version=source_message.ciphertext_version,
+            encryption_mode=source_message.encryption_mode,
+            nonce=source_message.nonce,
+            aad_hash=source_message.aad_hash,
+            client_created_at=client_created_at,
+            expires_at=expires_at,
+            auto_delete_after_read_seconds=conversation.delete_after_read_seconds,
+            has_attachments=source_message.has_attachments,
+        )
+        await messages_repo.create_recipient_state(
+            session,
+            message_id=forwarded_message.id,
+            recipient_user_id=payload.recipient_user_id,
+            recipient_device_id=recipient_device.id,
+        )
+        if source_message.has_attachments:
+            await _clone_forward_attachments(
+                session,
+                source_message_id=source_message.id,
+                target_message_id=forwarded_message.id,
+            )
+
+        event = await conversations_repo.create_event(
+            session,
+            conversation_id=conversation.id,
+            actor_user_id=current_user.id,
+            actor_device_id=current_device.id,
+            event_type=EventType.MESSAGE_FORWARDED,
+            target_message_id=forwarded_message.id,
+            payload={
+                "message_id": forwarded_message.id,
+                "message_uuid": forwarded_message.message_uuid,
+                "source_message_id": source_message.id,
+                "forward_from_message_id": source_message.id,
+                "sender_user_id": forwarded_message.sender_user_id,
+                "sender_device_id": forwarded_message.sender_device_id,
+                "recipient_user_id": forwarded_message.recipient_user_id,
+                "recipient_device_id": forwarded_message.recipient_device_id,
+                "message_type": forwarded_message.message_type.value,
+                "has_attachments": forwarded_message.has_attachments,
+                "client_created_at": forwarded_message.client_created_at.isoformat(),
+            },
+        )
+        realtime_payloads.append(
+            _event_to_realtime_payload(
+                conversation_id=conversation.id,
+                event_type=event.event_type.value,
+                event_id=event.id,
+                event_uuid=event.event_uuid,
+                actor_user_id=event.actor_user_id,
+                actor_device_id=event.actor_device_id,
+                target_message_id=event.target_message_id,
+                payload=event.payload,
+                created_at=event.created_at,
+            )
+        )
+        created_items.append(
             {
-                "message_id": message.id,
-                "message_uuid": message.message_uuid,
-                "sender_user_id": message.sender_user_id,
-                "recipient_user_id": message.recipient_user_id,
-                "message_type": message.message_type.value,
-                "ciphertext": message.ciphertext,
-                "ciphertext_version": message.ciphertext_version,
-                "encryption_mode": message.encryption_mode.value,
-                "nonce": message.nonce,
-                "aad_hash": message.aad_hash,
-                "client_created_at": message.client_created_at,
-                "server_received_at": message.server_received_at,
-                "delivered_at": message.delivered_at,
-                "read_at": message.read_at,
-                "expires_at": message.expires_at,
-                "has_attachments": message.has_attachments,
-                "reactions": _build_reaction_summaries(
-                    reactions_by_message_id[message.id],
-                    current_user_id=current_user.id,
-                ),
+                "source_message_id": source_message.id,
+                "message_id": forwarded_message.id,
+                "message_uuid": forwarded_message.message_uuid,
+                "recipient_device_id": forwarded_message.recipient_device_id,
+                "server_received_at": forwarded_message.server_received_at,
             }
         )
 
-    return {"items": items}
+    await conversations_repo.touch_conversation(
+        session,
+        conversation=conversation,
+        touched_at=_now(),
+    )
+    await session.commit()
+
+    _enqueue_recompute_unread(payload.recipient_user_id)
+    _enqueue_recompute_unread(current_user.id)
+
+    for item, realtime_payload in zip(created_items, realtime_payloads, strict=False):
+        _enqueue_push_notification(
+            user_id=payload.recipient_user_id,
+            conversation_id=conversation.id,
+            message_id=item["message_id"],
+        )
+        await realtime_hub.publish_conversation_event(conversation.id, realtime_payload)
+        await realtime_hub.publish_user_event(
+            payload.recipient_user_id,
+            realtime_payload,
+        )
+
+    return {
+        "conversation_id": conversation.id,
+        "recipient_user_id": payload.recipient_user_id,
+        "items": created_items,
+    }
+
+
+async def pin_message(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    conversation_id: int,
+    message_id: int,
+) -> PinMessageResponseData:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    message = await messages_repo.get_by_id_in_conversation(
+        session,
+        message_id=message_id,
+        conversation_id=conversation_id,
+    )
+    if message is None:
+        raise NotFoundError(
+            code="MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
+
+    await conversations_repo.set_pinned_message(
+        session,
+        conversation=conversation,
+        message_id=message.id,
+    )
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=current_device.id,
+        event_type=EventType.MESSAGE_PINNED,
+        target_message_id=message.id,
+        payload={
+            "message_id": message.id,
+            "pinned_message_id": message.id,
+            "preview": _preview_from_message(message),
+        },
+    )
+    await session.commit()
+
+    peer_user_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+
+    return PinMessageResponseData(
+        conversation_id=conversation_id,
+        message_id=message.id,
+        pinned=True,
+    )
+
+
+async def unpin_message(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    conversation_id: int,
+) -> PinMessageResponseData:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if conversation is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    previous_pinned_message_id = conversation.pinned_message_id
+    await conversations_repo.set_pinned_message(
+        session,
+        conversation=conversation,
+        message_id=None,
+    )
+    event = await conversations_repo.create_event(
+        session,
+        conversation_id=conversation_id,
+        actor_user_id=current_user.id,
+        actor_device_id=current_device.id,
+        event_type=EventType.MESSAGE_UNPINNED,
+        target_message_id=previous_pinned_message_id,
+        payload={"pinned_message_id": None},
+    )
+    await session.commit()
+
+    peer_user_id = _other_participant_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event.event_type.value,
+        event_id=event.id,
+        event_uuid=event.event_uuid,
+        actor_user_id=event.actor_user_id,
+        actor_device_id=event.actor_device_id,
+        target_message_id=event.target_message_id,
+        payload=event.payload,
+        created_at=event.created_at,
+    )
+    await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+
+    return PinMessageResponseData(
+        conversation_id=conversation_id,
+        message_id=None,
+        pinned=False,
+    )
 
 
 async def mark_read(
@@ -819,6 +1337,12 @@ async def delete_global(
             "scope": "global",
         },
     )
+    if conversation.pinned_message_id in deleted_ids:
+        await conversations_repo.set_pinned_message(
+            session,
+            conversation=conversation,
+            message_id=None,
+        )
 
     await conversations_repo.touch_conversation(
         session,

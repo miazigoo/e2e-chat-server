@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import Text, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.attachment import Attachment
 from app.models.chat_enums import (
     DeliveryStatus,
     EncryptionMode,
@@ -29,6 +30,7 @@ class MessagesRepository:
         recipient_device_id: int,
         message_uuid: str,
         reply_to_message_id: int | None,
+        forward_from_message_id: int | None,
         message_type: MessageType,
         ciphertext: str,
         ciphertext_version: int,
@@ -48,6 +50,7 @@ class MessagesRepository:
             recipient_device_id=recipient_device_id,
             message_uuid=message_uuid,
             reply_to_message_id=reply_to_message_id,
+            forward_from_message_id=forward_from_message_id,
             message_type=message_type,
             ciphertext=ciphertext,
             ciphertext_version=ciphertext_version,
@@ -330,6 +333,213 @@ class MessagesRepository:
             select(MessageReaction).where(MessageReaction.message_id.in_(message_ids))
         )
         return list(result.scalars().all())
+
+    async def list_by_ids(
+        self,
+        session: AsyncSession,
+        *,
+        message_ids: list[int],
+    ) -> list[Message]:
+        if not message_ids:
+            return []
+
+        result = await session.execute(
+            select(Message).where(
+                Message.id.in_(message_ids),
+                Message.is_deleted_global.is_(False),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def search_in_conversation_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        query: str,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Message]:
+        hidden_subquery = select(MessageVisibilityOverride.message_id).where(
+            MessageVisibilityOverride.user_id == user_id
+        )
+        pattern = f"%{query}%"
+
+        stmt = (
+            select(Message)
+            .outerjoin(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.is_deleted_global.is_(False),
+                ~Message.id.in_(hidden_subquery),
+                or_(
+                    Message.ciphertext.ilike(pattern),
+                    Attachment.encrypted_file_name.ilike(pattern),
+                    Attachment.mime_hint.ilike(pattern),
+                    cast(Attachment.encrypted_metadata, Text).ilike(pattern),
+                    Attachment.storage_key.ilike(pattern),
+                ),
+            )
+            .group_by(Message.id)
+            .order_by(Message.id.desc())
+            .limit(limit)
+        )
+
+        if cleared_at is not None:
+            stmt = stmt.where(Message.created_at > cleared_at)
+
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_shared_messages_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        tab: str,
+        before_message_id: int | None,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Message]:
+        hidden_subquery = select(MessageVisibilityOverride.message_id).where(
+            MessageVisibilityOverride.user_id == user_id
+        )
+
+        stmt = (
+            select(Message)
+            .join(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.is_deleted_global.is_(False),
+                Attachment.deleted_at.is_(None),
+                ~Message.id.in_(hidden_subquery),
+            )
+            .group_by(Message.id)
+            .order_by(Message.id.desc())
+            .limit(limit)
+        )
+
+        if before_message_id is not None:
+            stmt = stmt.where(Message.id < before_message_id)
+
+        if cleared_at is not None:
+            stmt = stmt.where(Message.created_at > cleared_at)
+
+        if tab == "media":
+            stmt = stmt.where(
+                or_(
+                    Attachment.mime_hint.ilike("image/%"),
+                    Attachment.mime_hint.ilike("video/%"),
+                )
+            )
+        elif tab == "files":
+            stmt = stmt.where(
+                or_(
+                    Attachment.mime_hint.is_(None),
+                    ~Attachment.mime_hint.ilike("image/%")
+                    & ~Attachment.mime_hint.ilike("video/%"),
+                )
+            )
+        elif tab == "links":
+            stmt = stmt.where(
+                or_(
+                    Message.ciphertext.ilike("%http://%"),
+                    Message.ciphertext.ilike("%https://%"),
+                    Message.ciphertext.ilike("%www.%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%http://%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%https://%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%www.%"),
+                )
+            )
+        else:
+            return []
+
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_shared_counts_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        cleared_at: datetime | None,
+    ) -> dict[str, int]:
+        hidden_subquery = select(MessageVisibilityOverride.message_id).where(
+            MessageVisibilityOverride.user_id == user_id
+        )
+
+        base_stmt = (
+            select(Message.id)
+            .join(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.is_deleted_global.is_(False),
+                Attachment.deleted_at.is_(None),
+                ~Message.id.in_(hidden_subquery),
+            )
+        )
+
+        if cleared_at is not None:
+            base_stmt = base_stmt.where(Message.created_at > cleared_at)
+
+        media_stmt = (
+            select(func.count(func.distinct(Message.id)))
+            .select_from(Message)
+            .join(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.id.in_(base_stmt),
+                or_(
+                    Attachment.mime_hint.ilike("image/%"),
+                    Attachment.mime_hint.ilike("video/%"),
+                ),
+            )
+        )
+        files_stmt = (
+            select(func.count(func.distinct(Message.id)))
+            .select_from(Message)
+            .join(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.id.in_(base_stmt),
+                or_(
+                    Attachment.mime_hint.is_(None),
+                    ~Attachment.mime_hint.ilike("image/%")
+                    & ~Attachment.mime_hint.ilike("video/%"),
+                ),
+            )
+        )
+        links_stmt = (
+            select(func.count(func.distinct(Message.id)))
+            .select_from(Message)
+            .outerjoin(Attachment, Attachment.message_id == Message.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.is_deleted_global.is_(False),
+                ~Message.id.in_(hidden_subquery),
+                or_(
+                    Message.ciphertext.ilike("%http://%"),
+                    Message.ciphertext.ilike("%https://%"),
+                    Message.ciphertext.ilike("%www.%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%http://%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%https://%"),
+                    cast(Attachment.encrypted_metadata, Text).ilike("%www.%"),
+                ),
+            )
+        )
+        if cleared_at is not None:
+            links_stmt = links_stmt.where(Message.created_at > cleared_at)
+
+        media = (await session.execute(media_stmt)).scalar_one() or 0
+        files = (await session.execute(files_stmt)).scalar_one() or 0
+        links = (await session.execute(links_stmt)).scalar_one() or 0
+
+        return {
+            "media": int(media),
+            "files": int(files),
+            "links": int(links),
+        }
 
     async def upsert_reaction(
         self,

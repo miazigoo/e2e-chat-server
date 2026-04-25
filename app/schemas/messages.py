@@ -7,6 +7,8 @@ from app.models.chat_enums import EncryptionMode, MessageType
 
 
 class SendMessageRequest(BaseModel):
+    """Client request for creating a new message in a conversation."""
+
     conversation_id: int
     recipient_user_id: int
 
@@ -39,6 +41,22 @@ class SendMessageRequest(BaseModel):
     def validate_attachment_ids_unique(cls, value: list[int]) -> list[int]:
         if len(value) != len(set(value)):
             raise ValueError("attachment_ids must be unique")
+        return value
+
+
+class ForwardMessagesRequest(BaseModel):
+    """Batch request for forwarding existing messages into another conversation."""
+
+    conversation_id: int
+    recipient_user_id: int
+    message_ids: list[int] = Field(min_length=1, max_length=50)
+    client_created_at: datetime | None = None
+
+    @field_validator("message_ids")
+    @classmethod
+    def validate_message_ids_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("message_ids must be unique")
         return value
 
 
@@ -75,6 +93,8 @@ class SetMessageReactionRequest(BaseModel):
 
 
 class SendMessageResponseData(BaseModel):
+    """Server acknowledgement for a newly accepted message."""
+
     message_id: int
     message_uuid: str
     conversation_id: int
@@ -85,13 +105,47 @@ class SendMessageResponseData(BaseModel):
     is_idempotent_replay: bool = False
 
 
+class ForwardedMessageItemSchema(BaseModel):
+    """Mapping between a source message and the newly created forwarded message."""
+
+    source_message_id: int
+    message_id: int
+    message_uuid: str
+    recipient_device_id: int
+    server_received_at: datetime
+
+
+class ForwardMessagesResponseData(BaseModel):
+    """Response payload for batch forwarding."""
+
+    conversation_id: int
+    recipient_user_id: int
+    items: list[ForwardedMessageItemSchema] = Field(default_factory=list)
+
+
 class MessageReactionSummarySchema(BaseModel):
+    """Reaction aggregate for one emoji/reaction string on a message."""
+
     reaction: str
     count: int
     me: bool = False
 
 
+class MessagePreviewSchema(BaseModel):
+    """Compact message preview used for replies, forwards and pinned messages."""
+
+    message_id: int
+    message_uuid: str
+    sender_user_id: int
+    message_type: MessageType
+    ciphertext: str
+    has_attachments: bool
+    client_created_at: datetime
+
+
 class MessageListItemSchema(BaseModel):
+    """Expanded message item returned in history, search and shared tabs."""
+
     message_id: int
     message_uuid: str
     sender_user_id: int
@@ -108,37 +162,86 @@ class MessageListItemSchema(BaseModel):
     read_at: datetime | None = None
     expires_at: datetime
     has_attachments: bool
+    reply_to_message_id: int | None = None
+    forward_from_message_id: int | None = None
+    reply_preview: MessagePreviewSchema | None = None
+    forward_preview: MessagePreviewSchema | None = None
     reactions: list[MessageReactionSummarySchema] = Field(default_factory=list)
 
 
 class ListMessagesResponseData(BaseModel):
+    """Paginated message history response."""
+
+    items: list[MessageListItemSchema] = Field(default_factory=list)
+
+
+class SearchMessagesResponseData(BaseModel):
+    """Conversation-local message search results."""
+
+    conversation_id: int
+    query: str
+    items: list[MessageListItemSchema] = Field(default_factory=list)
+
+
+class SharedTabCountsSchema(BaseModel):
+    """Counters for shared content tabs similar to Telegram media sections."""
+
+    media: int = 0
+    links: int = 0
+    files: int = 0
+
+
+class SharedMessagesResponseData(BaseModel):
+    """Items for one shared-content tab together with tab counters."""
+
+    conversation_id: int
+    tab: str
+    counts: SharedTabCountsSchema
     items: list[MessageListItemSchema] = Field(default_factory=list)
 
 
 class MarkDeliveredResponseData(BaseModel):
+    """Delivery acknowledgement response."""
+
     message_id: int
     status: str
     delivered_at: datetime
 
 
 class MarkReadResponseData(BaseModel):
+    """Read acknowledgement response."""
+
     message_id: int
     status: str
     read_at: datetime
 
 
 class DeleteMessagesResponseData(BaseModel):
+    """Deletion result for local or global delete operations."""
+
     deleted: bool
     scope: str
     message_ids: list[int] = Field(default_factory=list)
 
 
 class SetMessageReactionResponseData(BaseModel):
+    """Result of setting or replacing a reaction on a message."""
+
     message_id: int
     reaction: str
     updated: bool
 
 
 class DeleteMessageReactionResponseData(BaseModel):
+    """Result of removing the current user's reaction from a message."""
+
     message_id: int
     removed: bool
+
+
+class PinMessageResponseData(BaseModel):
+    """Result of pinning or unpinning a conversation message."""
+
+    conversation_id: int
+    message_id: int | None = None
+    pinned: bool

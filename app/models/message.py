@@ -60,6 +60,10 @@ class Message(Base):
         ForeignKey("messages.id", ondelete="SET NULL"),
         nullable=True,
     )
+    forward_from_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     message_type: Mapped[MessageType] = mapped_column(
         SAEnum(
@@ -139,6 +143,8 @@ class Message(Base):
         Index("ix_messages_recipient_read", "recipient_user_id", "read_at"),
         Index("ix_messages_expires_at", "expires_at"),
         Index("ix_messages_sender", "sender_user_id", "created_at"),
+        Index("ix_messages_reply_to_message_id", "reply_to_message_id"),
+        Index("ix_messages_forward_from_message_id", "forward_from_message_id"),
     )
 
 

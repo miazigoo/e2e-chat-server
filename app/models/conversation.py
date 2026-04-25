@@ -51,6 +51,10 @@ class Conversation(Base):
     delete_after_read_seconds: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    pinned_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     is_purged: Mapped[bool] = mapped_column(nullable=False, default=False)
@@ -77,6 +81,7 @@ class Conversation(Base):
         Index("ix_conversations_user_b", "user_b_id"),
         Index("ix_conversations_pair", "user_a_id", "user_b_id"),
         Index("ix_conversations_updated_at", "updated_at"),
+        Index("ix_conversations_pinned_message_id", "pinned_message_id"),
     )
 
 

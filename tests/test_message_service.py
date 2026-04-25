@@ -8,6 +8,7 @@ import pytest
 import app.services.message_service as message_service
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.schemas.messages import (
+    ForwardMessagesRequest,
     MarkReadRequest,
     SendMessageRequest,
     SetMessageReactionRequest,
@@ -514,3 +515,81 @@ def test_build_reaction_summaries_marks_my_reaction() -> None:
         {"reaction": "👍", "count": 2, "me": True},
         {"reaction": "❤️", "count": 1, "me": False},
     ]
+
+
+@pytest.mark.asyncio
+async def test_search_messages_blank_query_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_participant(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return _participant(
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_participant",
+        fake_get_participant,
+    )
+
+    result = await message_service.search_messages(
+        cast(Any, SimpleNamespace()),
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        conversation_id=1,
+        query="   ",
+        limit=20,
+    )
+
+    assert result.conversation_id == 1
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_forward_messages_invalid_recipient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = _conversation()
+
+    async def fake_get_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return conversation
+
+    async def fake_get_participant(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return _participant(conversation_id=conversation_id, user_id=user_id)
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_for_user",
+        fake_get_for_user,
+    )
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_participant",
+        fake_get_participant,
+    )
+
+    with pytest.raises(BadRequestError) as exc:
+        await message_service.forward_messages(
+            cast(Any, SimpleNamespace()),
+            current_user=cast(Any, SimpleNamespace(id=1)),
+            current_device=cast(Any, _device()),
+            payload=ForwardMessagesRequest(
+                conversation_id=1,
+                recipient_user_id=999,
+                message_ids=[10],
+            ),
+        )
+
+    assert exc.value.code == "INVALID_RECIPIENT"

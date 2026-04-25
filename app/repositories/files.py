@@ -238,6 +238,46 @@ class FilesRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_message_id(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+    ) -> list[Attachment]:
+        result = await session.execute(
+            select(Attachment).where(
+                Attachment.message_id == message_id,
+                Attachment.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def clone_attachment(
+        self,
+        session: AsyncSession,
+        *,
+        source_attachment: Attachment,
+        message_id: int,
+        storage_key: str,
+    ) -> Attachment:
+        cloned = Attachment(
+            message_id=message_id,
+            upload_session_id=None,
+            storage_key=storage_key,
+            bucket_name=source_attachment.bucket_name,
+            encrypted_file_name=source_attachment.encrypted_file_name,
+            encrypted_metadata=source_attachment.encrypted_metadata,
+            file_size=source_attachment.file_size,
+            mime_hint=source_attachment.mime_hint,
+            sha256_encrypted_blob=source_attachment.sha256_encrypted_blob,
+            upload_status=AttachmentStatus.LINKED,
+            expires_at=source_attachment.expires_at,
+            deleted_at=None,
+        )
+        session.add(cloned)
+        await session.flush()
+        return cloned
+
     async def mark_attachments_deleted(
         self,
         session: AsyncSession,

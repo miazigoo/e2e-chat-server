@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.chat_enums import ProtectionMode
+from app.schemas.messages import MessagePreviewSchema
 
 
 class CreateConversationRequest(BaseModel):
@@ -61,6 +62,7 @@ class GetConversationResponseData(BaseModel):
     peer_shared_secret_enabled: bool = False
     is_active: bool
     is_purged: bool
+    pinned_message: MessagePreviewSchema | None = None
 
 
 class UpdateConversationResponseData(BaseModel):
@@ -118,6 +120,7 @@ class ConversationListItemSchema(BaseModel):
     peer: ConversationPeerSchema
     unread_count: int = 0
     last_message: ConversationLastMessageSchema | None = None
+    pinned_message: MessagePreviewSchema | None = None
 
 
 class ListConversationsResponseData(BaseModel):

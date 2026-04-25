@@ -35,6 +35,7 @@ class VisibilityReason(StrEnum):
 
 class EventType(StrEnum):
     MESSAGE_CREATED = "message_created"
+    MESSAGE_FORWARDED = "message_forwarded"
     MESSAGE_DELETED_GLOBAL = "message_deleted_global"
     MESSAGE_HIDDEN_FOR_USER = "message_hidden_for_user"
     CONVERSATION_CLEARED_LOCAL = "conversation_cleared_local"
@@ -43,6 +44,8 @@ class EventType(StrEnum):
     MESSAGE_READ = "message_read"
     MESSAGE_REACTION_SET = "message_reaction_set"
     MESSAGE_REACTION_REMOVED = "message_reaction_removed"
+    MESSAGE_PINNED = "message_pinned"
+    MESSAGE_UNPINNED = "message_unpinned"
     CONVERSATION_SETTINGS_UPDATED = "conversation_settings_updated"
     FILE_UPLOADED = "file_uploaded"
     FILE_DELETED = "file_deleted"

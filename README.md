@@ -637,8 +637,49 @@ Multipart field:
 
 ```
 
+### Forward messages
+`POST /api/v1/messages/forward`
+```json
+{
+  "conversation_id": 123,
+  "recipient_user_id": 2,
+  "message_ids": [999, 1000],
+  "client_created_at": "2026-04-25T12:10:00+00:00"
+}
+```
+
+### Search inside conversation
+`GET /api/v1/messages/conversations/{conversation_id}/search?q=query&limit=50`
+
+Note:
+Server-side search is limited to fields visible to the backend, such as `ciphertext`
+and attachment metadata. In a true E2E plaintext-search scenario, a separate client-side
+or encrypted search index is still needed.
+
+### Shared media / links / files
+`GET /api/v1/messages/conversations/{conversation_id}/shared?tab=media&limit=50`
+
+Allowed `tab` values:
+- `media`
+- `links`
+- `files`
+
+Response also includes counts for all tabs so the client can render Telegram-like tabs.
+
+### Pin message
+`POST /api/v1/messages/conversations/{conversation_id}/pin/{message_id}`
+
+### Unpin message
+`DELETE /api/v1/messages/conversations/{conversation_id}/pin`
+
 ### List messages
 `GET /api/v1/messages/conversations/{conversation_id}?before_id=1000&limit=50`
+
+Each message item now may include:
+- `reply_to_message_id`
+- `forward_from_message_id`
+- `reply_preview`
+- `forward_preview`
 
 ### Delivered ack
 `POST /api/v1/messages/{message_id}/delivered`
@@ -775,6 +816,30 @@ X-Device-UUID: <device_uuid>
     "changelog": "Bug fixes and performance improvements",
     "content_type": "application/vnd.android.package-archive",
     "uploaded_at": "2026-04-25T12:00:00+00:00"
+  }
+}
+```
+#### Message pinned
+```json
+{
+  "type": "conversation.event",
+  "conversation_id": 123,
+  "event": {
+    "event_type": "message_pinned",
+    "target_message_id": 999,
+    "payload": {
+      "message_id": 999,
+      "pinned_message_id": 999,
+      "preview": {
+        "message_id": 999,
+        "message_uuid": "uuid",
+        "sender_user_id": 1,
+        "message_type": "text",
+        "ciphertext": "ciphertext",
+        "has_attachments": false,
+        "client_created_at": "2026-04-25T12:00:00+00:00"
+      }
+    }
   }
 }
 ```

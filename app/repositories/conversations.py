@@ -158,6 +158,22 @@ class ConversationsRepository:
             .order_by(Message.conversation_id.asc(), Message.id.desc())
         )
         all_messages = list(messages_result.scalars().all())
+        pinned_message_ids = {
+            conversation.pinned_message_id
+            for conversation in conversations
+            if conversation.pinned_message_id is not None
+        }
+        pinned_messages: dict[int, Message] = {}
+        if pinned_message_ids:
+            pinned_result = await session.execute(
+                select(Message).where(
+                    Message.id.in_(pinned_message_ids),
+                    Message.is_deleted_global.is_(False),
+                )
+            )
+            pinned_messages = {
+                message.id: message for message in pinned_result.scalars().all()
+            }
 
         last_message_by_conversation_id: dict[int, Message] = {}
         unread_count_by_conversation_id: dict[int, int] = {
@@ -201,6 +217,11 @@ class ConversationsRepository:
                     "participant": participant_by_conversation_id.get(conversation.id),
                     "peer_participant": peer_participant_by_conversation_id.get(
                         conversation.id
+                    ),
+                    "pinned_message": (
+                        pinned_messages.get(conversation.pinned_message_id)
+                        if conversation.pinned_message_id is not None
+                        else None
                     ),
                 }
             )
@@ -340,3 +361,14 @@ class ConversationsRepository:
     ) -> None:
         conversation.updated_at = touched_at
         await session.flush()
+
+    async def set_pinned_message(
+        self,
+        session: AsyncSession,
+        *,
+        conversation: Conversation,
+        message_id: int | None,
+    ) -> Conversation:
+        conversation.pinned_message_id = message_id
+        await session.flush()
+        return conversation

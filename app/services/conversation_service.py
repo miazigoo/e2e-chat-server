@@ -24,6 +24,7 @@ from app.schemas.conversations import (
     UpdateConversationRequest,
     UpdateConversationSettingsRequest,
 )
+from app.schemas.messages import MessagePreviewSchema
 
 users_repo = UsersRepository()
 conversations_repo = ConversationsRepository()
@@ -99,6 +100,20 @@ def _event_to_realtime_payload(
             "created_at": created_at.isoformat(),
         },
     }
+
+
+def _preview_from_message(message: Message | None) -> MessagePreviewSchema | None:
+    if message is None:
+        return None
+    return MessagePreviewSchema(
+        message_id=message.id,
+        message_uuid=message.message_uuid,
+        sender_user_id=message.sender_user_id,
+        message_type=message.message_type,
+        ciphertext=message.ciphertext,
+        has_attachments=message.has_attachments,
+        client_created_at=message.client_created_at,
+    )
 
 
 async def create_conversation(
@@ -208,6 +223,7 @@ async def list_conversations(
                 ),
                 unread_count=row["unread_count"],
                 last_message=last_message_schema,
+                pinned_message=_preview_from_message(row.get("pinned_message")),
             )
         )
 
@@ -246,6 +262,13 @@ async def get_conversation(
         conversation_id=conversation_id,
         user_id=peer_user_id,
     )
+    pinned_message = None
+    if conversation.pinned_message_id is not None:
+        pinned_message = await messages_repo.get_by_id_in_conversation(
+            session,
+            message_id=conversation.pinned_message_id,
+            conversation_id=conversation_id,
+        )
 
     return {
         "conversation_id": conversation.id,
@@ -271,6 +294,7 @@ async def get_conversation(
         ),
         "is_active": conversation.is_active,
         "is_purged": conversation.is_purged,
+        "pinned_message": _preview_from_message(pinned_message),
     }
 
 
@@ -557,6 +581,12 @@ async def clear_global(
             "deleted_attachment_ids": deleted_attachment_ids,
         },
     )
+    if conversation.pinned_message_id is not None:
+        await conversations_repo.set_pinned_message(
+            session,
+            conversation=conversation,
+            message_id=None,
+        )
 
     await conversations_repo.touch_conversation(
         session,
