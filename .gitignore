@@ -44,3 +44,4 @@ pgdump_cms/*
 celerybeat-schedule
 celerybeat-schedule-shm
 celerybeat-schedule-wal
+.codex
