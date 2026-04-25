@@ -9,7 +9,7 @@ def setup_metrics(app: FastAPI) -> Instrumentator:
         should_ignore_untemplated=True,
         should_respect_env_var=False,
         should_instrument_requests_inprogress=True,
-        excluded_handlers={"/health/live", "/health/ready", "/metrics"},
+        excluded_handlers=["/health/live", "/health/ready", "/metrics"],
         inprogress_name="http_requests_inprogress",
         inprogress_labels=True,
     )

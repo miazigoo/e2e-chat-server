@@ -190,12 +190,13 @@ async def upload_bytes(
     def _op() -> None:
         try:
             client = _get_minio_client_sync()
+            resolved_content_type = content_type or "application/octet-stream"
             client.put_object(
                 bucket_name=bucket_name,
                 object_name=object_name,
                 data=BytesIO(data),
                 length=len(data),
-                content_type=content_type,
+                content_type=resolved_content_type,
             )
         except Exception as exc:
             _raise_storage_unavailable("put_object", exc)
