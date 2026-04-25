@@ -924,3 +924,11 @@ http://localhost:8000/openapi.json
 # Health:
 http://localhost:8000/health
 ```
+
+---
+## Автозапуск на сервере (systemd)
+Включил автозапуск после перезагрузки сервера через systemd:
+- Создан unit: `/etc/systemd/system/e2e-chat-server.service`
+- Включен: `systemctl enable e2e-chat-server.service`
+- Активен: `active (exited)` (это нормально для `Type=oneshot` + `RemainAfterExit=yes`)
+- Docker daemon тоже включен и активен (`enabled`, `active`)
