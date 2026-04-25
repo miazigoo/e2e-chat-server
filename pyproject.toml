@@ -1,6 +1,6 @@
 [tool.flake8]
 max-line-length = 88
-exclude = [".git", "__pycache__", "venv", ".venv", "migrations"]
+exclude = [".git", "__pycache__", "venv", ".venv", "migrations", "alembic/versions"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -13,9 +13,15 @@ ignore_missing_imports = true
 [tool.black]
 line-length = 88
 target-version = ["py313"]
+extend-exclude = '''
+/(
+    alembic/versions
+)/
+'''
 
 [tool.isort]
 profile = "black"
 line_length = 88
 py_version = 312
 skip_gitignore = true
+skip_glob = ["alembic/versions/*.py"]
