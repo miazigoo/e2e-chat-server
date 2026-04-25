@@ -1,3 +1,4 @@
+from app.models.app_release import AppRelease
 from app.models.attachment import Attachment, UploadSession
 from app.models.auth_email_code import AuthEmailCode
 from app.models.auth_session import AuthSession
@@ -20,6 +21,7 @@ from app.models.user import User
 
 __all__ = [
     "Base",
+    "AppRelease",
     "Attachment",
     "UploadSession",
     "AuthEmailCode",

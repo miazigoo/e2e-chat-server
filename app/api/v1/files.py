@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.dependencies.auth import get_current_user
 from app.models.user import User
+from app.schemas.app_releases import ApkUploadResponseData, LatestAppReleaseResponseData
 from app.schemas.common import ApiResponse
 from app.schemas.files import (
     CompleteUploadSessionRequest,
@@ -14,6 +15,10 @@ from app.schemas.files import (
     InitAttachmentsRequest,
     InitAttachmentsResponseData,
     ListMessageAttachmentsResponseData,
+)
+from app.services.app_release_service import (
+    get_latest_android_apk_release,
+    upload_android_apk_release,
 )
 from app.services.attachment_service import (
     get_attachment_metadata,
@@ -26,6 +31,18 @@ from app.services.file_service import (
 )
 
 router = APIRouter()
+
+
+def _extract_apk_upload_token(request: Request, form_token: str | None) -> str | None:
+    if form_token:
+        return form_token
+    header_token = request.headers.get("X-APK-Upload-Token")
+    if header_token:
+        return header_token
+    query_token = request.query_params.get("token")
+    if query_token:
+        return query_token
+    return None
 
 
 @router.post(
@@ -114,4 +131,39 @@ async def get_attachment_metadata_endpoint(
         current_user=current_user,
         attachment_id=attachment_id,
     )
+    return ApiResponse(data=data)
+
+
+@router.post(
+    "/apk/upload",
+    response_model=ApiResponse[ApkUploadResponseData],
+)
+async def upload_apk_endpoint(
+    request: Request,
+    version_name: str = Form(...),
+    version_code: int = Form(...),
+    changelog: str | None = Form(default=None),
+    token: str | None = Form(default=None),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[ApkUploadResponseData]:
+    data = await upload_android_apk_release(
+        session,
+        upload_token=_extract_apk_upload_token(request, token),
+        version_name=version_name,
+        version_code=version_code,
+        changelog=changelog,
+        file=file,
+    )
+    return ApiResponse(data=data)
+
+
+@router.get(
+    "/apk/latest",
+    response_model=ApiResponse[LatestAppReleaseResponseData],
+)
+async def get_latest_apk_endpoint(
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[LatestAppReleaseResponseData]:
+    data = await get_latest_android_apk_release(session)
     return ApiResponse(data=data)

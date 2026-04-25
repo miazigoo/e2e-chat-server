@@ -1,14 +1,89 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.dependencies.auth import get_current_user
 from app.models.user import User
 from app.schemas.common import ApiResponse
-from app.schemas.users import UserSafetyResponseData, UserSearchResponseData
-from app.services.user_service import get_user_safety, search_users
+from app.schemas.users import (
+    UpdateUserProfileRequest,
+    UserProfileResponseData,
+    UserPublicProfileResponseData,
+    UserSafetyResponseData,
+    UserSearchResponseData,
+)
+from app.services.user_service import (
+    delete_my_avatar,
+    get_my_profile,
+    get_user_profile,
+    get_user_safety,
+    search_users,
+    update_my_profile,
+    upload_my_avatar,
+)
 
 router = APIRouter()
+
+
+@router.get(
+    "/me",
+    response_model=ApiResponse[UserProfileResponseData],
+)
+async def get_my_profile_endpoint(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserProfileResponseData]:
+    data = await get_my_profile(session, current_user=current_user)
+    return ApiResponse(data=data)
+
+
+@router.patch(
+    "/me",
+    response_model=ApiResponse[UserProfileResponseData],
+)
+async def update_my_profile_endpoint(
+    payload: UpdateUserProfileRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserProfileResponseData]:
+    data = await update_my_profile(
+        session,
+        current_user=current_user,
+        payload=payload,
+    )
+    return ApiResponse(data=data)
+
+
+@router.post(
+    "/me/avatar",
+    response_model=ApiResponse[UserProfileResponseData],
+)
+async def upload_my_avatar_endpoint(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserProfileResponseData]:
+    data = await upload_my_avatar(
+        session,
+        current_user=current_user,
+        file=file,
+    )
+    return ApiResponse(data=data)
+
+
+@router.delete(
+    "/me/avatar",
+    response_model=ApiResponse[UserProfileResponseData],
+)
+async def delete_my_avatar_endpoint(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserProfileResponseData]:
+    data = await delete_my_avatar(
+        session,
+        current_user=current_user,
+    )
+    return ApiResponse(data=data)
 
 
 @router.get(
@@ -40,6 +115,23 @@ async def get_user_safety_endpoint(
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[UserSafetyResponseData]:
     data = await get_user_safety(
+        session,
+        current_user=current_user,
+        target_user_id=user_id,
+    )
+    return ApiResponse(data=data)
+
+
+@router.get(
+    "/{user_id}/profile",
+    response_model=ApiResponse[UserPublicProfileResponseData],
+)
+async def get_user_profile_endpoint(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[UserPublicProfileResponseData]:
+    data = await get_user_profile(
         session,
         current_user=current_user,
         target_user_id=user_id,

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.device import Device
 from app.models.device_prekey import DevicePreKey
+from app.models.user import User
 
 
 class DevicesRepository:
@@ -171,3 +172,18 @@ class DevicesRepository:
             device.revoked_at = revoked_at
         await session.flush()
         return device
+
+    async def list_active_with_fcm(self, session: AsyncSession) -> list[Device]:
+        result = await session.execute(
+            select(Device)
+            .join(User, User.id == Device.user_id)
+            .where(
+                Device.is_active.is_(True),
+                Device.revoked_at.is_(None),
+                Device.fcm_token.is_not(None),
+                User.is_deleted.is_(False),
+                User.push_notifications_enabled.is_(True),
+                User.apk_update_notifications_enabled.is_(True),
+            )
+        )
+        return list(result.scalars().all())

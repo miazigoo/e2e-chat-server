@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from io import BytesIO
 from typing import NoReturn
 
 import anyio
@@ -156,3 +157,26 @@ async def bucket_exists(bucket_name: str) -> bool:
             _raise_storage_unavailable("bucket_exists", exc)
 
     return await anyio.to_thread.run_sync(_op)
+
+
+async def upload_bytes(
+    *,
+    bucket_name: str,
+    object_name: str,
+    data: bytes,
+    content_type: str | None = None,
+) -> None:
+    def _op() -> None:
+        try:
+            client = _get_minio_client_sync()
+            client.put_object(
+                bucket_name=bucket_name,
+                object_name=object_name,
+                data=BytesIO(data),
+                length=len(data),
+                content_type=content_type,
+            )
+        except Exception as exc:
+            _raise_storage_unavailable("put_object", exc)
+
+    await anyio.to_thread.run_sync(_op)

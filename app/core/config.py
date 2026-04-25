@@ -55,12 +55,16 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
     minio_bucket_attachments: str = Field(alias="MINIO_BUCKET_ATTACHMENTS")
     minio_bucket_temp: str = Field(alias="MINIO_BUCKET_TEMP")
+    minio_bucket_assets: str = Field(alias="MINIO_BUCKET_ASSETS")
     presigned_download_expire_seconds: int = Field(
         default=300, alias="PRESIGNED_DOWNLOAD_EXPIRE_SECONDS"
     )
     presigned_upload_expire_seconds: int = Field(
         default=900, alias="PRESIGNED_UPLOAD_EXPIRE_SECONDS"
     )
+    avatar_max_bytes: int = Field(default=5 * 1024 * 1024, alias="AVATAR_MAX_BYTES")
+    apk_max_bytes: int = Field(default=256 * 1024 * 1024, alias="APK_MAX_BYTES")
+    apk_upload_token: str = Field(alias="APK_UPLOAD_TOKEN")
 
     fcm_project_id: Optional[str] = Field(default=None, alias="FCM_PROJECT_ID")
     fcm_credentials_path: Optional[str] = Field(

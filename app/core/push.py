@@ -69,3 +69,16 @@ def build_generic_event_push_payload(
         "conversation_id": str(conversation_id),
         "event_type": event_type,
     }
+
+
+def build_app_update_push_payload(
+    *,
+    version_name: str,
+    version_code: int,
+) -> dict[str, str]:
+    return {
+        "type": "app_update_available",
+        "platform": "android",
+        "version_name": version_name,
+        "version_code": str(version_code),
+    }

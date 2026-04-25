@@ -21,6 +21,14 @@ class UsersRepository:
         result = await session.execute(select(User).where(User.nickname == nickname))
         return result.scalar_one_or_none()
 
+    async def get_by_public_id(
+        self,
+        session: AsyncSession,
+        public_id: str,
+    ) -> User | None:
+        result = await session.execute(select(User).where(User.public_id == public_id))
+        return result.scalar_one_or_none()
+
     async def search_by_nickname_prefix(
         self,
         session: AsyncSession,
