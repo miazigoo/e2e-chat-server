@@ -27,7 +27,7 @@ CADDY_HTTPS_BIND=443
 FCM_CREDENTIALS_PATH=/run/secrets/fcm_service_account.json
 
 BACKEND_CORS_ORIGINS=https://<SERVER_IP>
-TRUSTED_HOSTS=<SERVER_IP>,localhost,127.0.0.1
+TRUSTED_HOSTS=<SERVER_IP>,localhost,127.0.0.1,api
 ```
 
 Notes:
