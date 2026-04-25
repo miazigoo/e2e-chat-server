@@ -53,6 +53,9 @@ class UserProfileSettingsSchema(BaseModel):
     apk_update_notifications_enabled: bool = Field(
         description="Whether app update notifications should be sent."
     )
+    google_2fa_enabled: bool = Field(
+        description="Whether Google Authenticator style TOTP 2FA is enabled."
+    )
 
 
 class UserPublicProfileResponseData(BaseModel):

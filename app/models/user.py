@@ -53,6 +53,17 @@ class User(Base):
         default=False,
         nullable=False,
     )
+    google_2fa_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    google_2fa_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    google_2fa_pending_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    google_2fa_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

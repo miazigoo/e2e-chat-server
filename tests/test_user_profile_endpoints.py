@@ -28,6 +28,7 @@ def _profile_payload() -> dict[str, Any]:
             "theme": "system",
             "push_notifications_enabled": True,
             "apk_update_notifications_enabled": True,
+            "google_2fa_enabled": False,
         },
     }
 

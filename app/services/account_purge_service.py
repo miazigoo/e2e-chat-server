@@ -193,6 +193,10 @@ async def purge_account(
     user.password_hash = "purged"
     user.email = None
     user.email_2fa_enabled = False
+    user.google_2fa_enabled = False
+    user.google_2fa_secret = None
+    user.google_2fa_pending_secret = None
+    user.google_2fa_confirmed_at = None
     user.is_active = False
     user.is_frozen = True
     user.pending_deletion = False

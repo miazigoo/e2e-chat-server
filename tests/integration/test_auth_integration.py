@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 
 import pytest
@@ -13,10 +14,22 @@ from app.core.exceptions import (
     UnauthorizedError,
 )
 from app.core.security import hash_password
+from app.core.totp import _generate_totp_code, verify_totp_code
 from app.models.auth_email_code import AuthEmailCode
 from app.models.login_attempt import LoginAttempt
-from app.schemas.auth import LoginRequest, RegisterRequest, VerifyEmailCodeRequest
-from app.services.auth_service import login_user, register_user, verify_email_code
+from app.schemas.auth import (
+    Google2FAConfirmRequest,
+    LoginRequest,
+    RegisterRequest,
+    VerifyEmailCodeRequest,
+)
+from app.services.auth_service import (
+    begin_google_2fa_setup,
+    confirm_google_2fa_setup,
+    login_user,
+    register_user,
+    verify_email_code,
+)
 from tests.integration.helpers import create_user
 
 
@@ -58,6 +71,26 @@ async def test_register_user_duplicate_nickname(session: AsyncSession) -> None:
     assert exc.value.status_code == 409
     assert exc.value.code == "NICKNAME_ALREADY_EXISTS"
     assert exc.value.message == "Nickname already exists"
+
+
+async def test_register_user_duplicate_nickname_case_insensitive(
+    session: AsyncSession,
+) -> None:
+    await create_user(session, nickname="@Dup")
+    await session.commit()
+
+    with pytest.raises(ConflictError) as exc:
+        await register_user(
+            session,
+            RegisterRequest(
+                nickname="  @dup  ",
+                password="supersecret123",
+                email=None,
+                email_2fa_enabled=False,
+            ),
+        )
+
+    assert exc.value.code == "NICKNAME_ALREADY_EXISTS"
 
 
 async def test_register_user_duplicate_email(session: AsyncSession) -> None:
@@ -216,6 +249,58 @@ async def test_verify_email_code_success(
     record = query.scalar_one()
 
     assert record.consumed_at is not None
+
+
+async def test_google_2fa_setup_and_login(session: AsyncSession) -> None:
+    user = await create_user(
+        session,
+        nickname="@u1",
+        password_hash=hash_password("correct-password"),
+    )
+    await session.commit()
+
+    setup_result = await begin_google_2fa_setup(session, current_user=user)
+    assert setup_result["secret"]
+    assert (
+        verify_totp_code(
+            secret=setup_result["secret"],
+            code="000000",
+        )
+        is False
+    )
+
+    user = await session.get(type(user), user.id)
+    assert user is not None
+    pending_secret = user.google_2fa_pending_secret
+    assert pending_secret is not None
+
+    valid_code = _generate_totp_code(
+        secret=pending_secret,
+        counter=int(time.time()) // 30,
+    )
+
+    confirm_result = await confirm_google_2fa_setup(
+        session,
+        current_user=user,
+        payload=Google2FAConfirmRequest(code=valid_code),
+    )
+    assert confirm_result["enabled"] is True
+
+    login_requires_totp = await login_user(
+        session,
+        LoginRequest(nickname="@u1", password="correct-password"),
+    )
+    assert login_requires_totp["requires_totp"] is True
+
+    login_with_totp = await login_user(
+        session,
+        LoginRequest(
+            nickname="@u1",
+            password="correct-password",
+            totp_code=valid_code,
+        ),
+    )
+    assert login_with_totp["requires_totp"] is False
 
 
 async def test_verify_email_code_reuse_fails(

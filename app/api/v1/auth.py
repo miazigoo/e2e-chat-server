@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import COMMON_ERROR_RESPONSES
@@ -14,6 +15,9 @@ from app.dependencies.auth import (
 from app.models.auth_session import AuthSession
 from app.models.user import User
 from app.schemas.auth import (
+    Google2FAConfirmRequest,
+    Google2FASetupResponseData,
+    Google2FAStatusResponseData,
     LoginRequest,
     LoginResponseData,
     LogoutAllResponseData,
@@ -28,6 +32,10 @@ from app.schemas.auth import (
 from app.schemas.common import ApiErrorResponse, ApiResponse
 from app.schemas.devices import BootstrapDeviceRequest, BootstrapDeviceResponseData
 from app.services.auth_service import (
+    begin_google_2fa_setup,
+    confirm_google_2fa_setup,
+    disable_google_2fa,
+    get_google_2fa_qr_png,
     login_user,
     logout_all_sessions,
     logout_current_session,
@@ -141,6 +149,72 @@ async def verify_email_code_endpoint(
         user_agent=user_agent,
     )
     return ApiResponse(data=VerifyEmailCodeResponseData(**data))
+
+
+@router.post(
+    "/2fa/google/setup",
+    response_model=ApiResponse[Google2FASetupResponseData],
+    summary="Begin Google TOTP 2FA setup",
+    description=(
+        "Generate a pending Google Authenticator compatible secret " "and otpauth URI."
+    ),
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def begin_google_2fa_setup_endpoint(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[Google2FASetupResponseData]:
+    data = await begin_google_2fa_setup(session, current_user=current_user)
+    return ApiResponse(data=Google2FASetupResponseData(**data))
+
+
+@router.post(
+    "/2fa/google/confirm",
+    response_model=ApiResponse[Google2FAStatusResponseData],
+    summary="Confirm Google TOTP 2FA setup",
+    description="Validate the TOTP code from Google Authenticator and enable 2FA.",
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def confirm_google_2fa_setup_endpoint(
+    payload: Google2FAConfirmRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[Google2FAStatusResponseData]:
+    data = await confirm_google_2fa_setup(
+        session,
+        current_user=current_user,
+        payload=payload,
+    )
+    return ApiResponse(data=Google2FAStatusResponseData(**data))
+
+
+@router.delete(
+    "/2fa/google",
+    response_model=ApiResponse[Google2FAStatusResponseData],
+    summary="Disable Google TOTP 2FA",
+    description="Disable Google Authenticator based 2FA for the authenticated user.",
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def disable_google_2fa_endpoint(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[Google2FAStatusResponseData]:
+    data = await disable_google_2fa(session, current_user=current_user)
+    return ApiResponse(data=Google2FAStatusResponseData(**data))
+
+
+@router.get(
+    "/2fa/google/qr",
+    summary="Get Google TOTP setup QR",
+    description="Render the current pending Google TOTP setup as a PNG QR code.",
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def get_google_2fa_qr_endpoint(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    png_bytes = await get_google_2fa_qr_png(session, current_user=current_user)
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @router.post(

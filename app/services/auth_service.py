@@ -5,6 +5,7 @@ import string
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -14,6 +15,7 @@ from app.core.exceptions import (
     ForbiddenError,
     LockedError,
     NotFoundError,
+    ServiceUnavailableError,
     UnauthorizedError,
 )
 from app.core.security import (
@@ -26,13 +28,21 @@ from app.core.security import (
     verify_password,
 )
 from app.core.task_dispatch import dispatch_background_task
+from app.core.totp import (
+    build_totp_provisioning_uri,
+    generate_totp_secret,
+    render_totp_qr_png,
+    verify_totp_code,
+)
 from app.models.auth_session import AuthSession
 from app.models.device import Device
+from app.models.user import User
 from app.repositories.auth import AuthRepository
 from app.repositories.auth_sessions import AuthSessionsRepository
 from app.repositories.devices import DevicesRepository
 from app.repositories.users import UsersRepository
 from app.schemas.auth import (
+    Google2FAConfirmRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
@@ -43,6 +53,7 @@ users_repo = UsersRepository()
 auth_repo = AuthRepository()
 auth_sessions_repo = AuthSessionsRepository()
 devices_repo = DevicesRepository()
+TOTP_ISSUER_FALLBACK = "Secure Chat"
 
 
 def _enqueue_purge_account(user_id: int, reason: str) -> None:
@@ -61,6 +72,34 @@ def _enqueue_purge_account(user_id: int, reason: str) -> None:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_nickname(nickname: str) -> str:
+    normalized = nickname.strip()
+    if not normalized:
+        raise BadRequestError(
+            code="INVALID_NICKNAME",
+            message="nickname cannot be blank",
+        )
+    return normalized
+
+
+def _totp_issuer() -> str:
+    issuer = settings.app_name.strip()
+    return issuer or TOTP_ISSUER_FALLBACK
+
+
+def _raise_conflict_from_integrity(exc: IntegrityError) -> None:
+    details = str(exc.orig).lower()
+    if "email" in details:
+        raise ConflictError(
+            code="EMAIL_ALREADY_EXISTS",
+            message="Email already exists",
+        ) from exc
+    raise ConflictError(
+        code="NICKNAME_ALREADY_EXISTS",
+        message="Nickname already exists",
+    ) from exc
 
 
 def _mask_email(email: str | None) -> str | None:
@@ -202,13 +241,15 @@ async def _resolve_device_for_auth(
 
 
 async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict:
+    normalized_nickname = _normalize_nickname(payload.nickname)
+
     if payload.email_2fa_enabled and not payload.email:
         raise BadRequestError(
             code="EMAIL_REQUIRED_FOR_2FA",
             message="Email is required when email 2FA is enabled",
         )
 
-    existing_user = await users_repo.get_by_nickname(session, payload.nickname)
+    existing_user = await users_repo.get_by_nickname(session, normalized_nickname)
     if existing_user:
         raise ConflictError(
             code="NICKNAME_ALREADY_EXISTS",
@@ -225,13 +266,17 @@ async def register_user(session: AsyncSession, payload: RegisterRequest) -> dict
 
     user = await users_repo.create_user(
         session,
-        nickname=payload.nickname,
+        nickname=normalized_nickname,
         password_hash=hash_password(payload.password),
         email=payload.email,
         email_2fa_enabled=payload.email_2fa_enabled,
     )
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        _raise_conflict_from_integrity(exc)
 
     return {
         "user_id": user.id,
@@ -249,12 +294,13 @@ async def login_user(
     device_fingerprint: str | None = None,
     user_agent: str | None = None,
 ) -> dict:
-    user = await users_repo.get_by_nickname(session, payload.nickname)
+    normalized_nickname = _normalize_nickname(payload.nickname)
+    user = await users_repo.get_by_nickname(session, normalized_nickname)
 
     if not user:
         await auth_repo.create_login_attempt(
             session,
-            nickname=payload.nickname,
+            nickname=normalized_nickname,
             user_id=None,
             ip_address=ip_address,
             device_fingerprint=device_fingerprint,
@@ -283,7 +329,7 @@ async def login_user(
     if not verify_password(payload.password, user.password_hash):
         await auth_repo.create_login_attempt(
             session,
-            nickname=payload.nickname,
+            nickname=normalized_nickname,
             user_id=user.id,
             ip_address=ip_address,
             device_fingerprint=device_fingerprint,
@@ -340,6 +386,26 @@ async def login_user(
 
     user.lock_until = None
     user.failed_login_stage = 0
+    if user.google_2fa_enabled:
+        if not user.google_2fa_secret:
+            raise ForbiddenError(
+                code="ACCOUNT_2FA_MISCONFIGURED",
+                message="Account 2FA is misconfigured",
+            )
+        if not payload.totp_code:
+            await session.commit()
+            return {
+                "requires_email_code": False,
+                "requires_totp": True,
+                "requires_bootstrap": False,
+            }
+        if not verify_totp_code(secret=user.google_2fa_secret, code=payload.totp_code):
+            await session.commit()
+            raise UnauthorizedError(
+                code="INVALID_TOTP_CODE",
+                message="Invalid 2FA code",
+            )
+
     if user.email_2fa_enabled and not user.email:
         raise ForbiddenError(
             code="ACCOUNT_2FA_MISCONFIGURED",
@@ -369,6 +435,7 @@ async def login_user(
 
         response = {
             "requires_email_code": True,
+            "requires_totp": False,
             "requires_bootstrap": False,
             "login_challenge_id": login_challenge_id,
             "email_masked": _mask_email(user.email),
@@ -390,6 +457,7 @@ async def login_user(
         await session.commit()
         return {
             "requires_email_code": False,
+            "requires_totp": False,
             **bootstrap_data,
         }
 
@@ -407,6 +475,7 @@ async def login_user(
 
     return {
         "requires_email_code": False,
+        "requires_totp": False,
         "requires_bootstrap": False,
         "access_token": tokens["access_token"],
         "refresh_token": tokens["refresh_token"],
@@ -521,6 +590,123 @@ async def verify_email_code(
         "refresh_token": tokens["refresh_token"],
         "expires_in": tokens["expires_in"],
     }
+
+
+async def begin_google_2fa_setup(
+    session: AsyncSession,
+    *,
+    current_user: User,
+) -> dict:
+    user = await users_repo.get_by_id(session, current_user.id)
+    if user is None or user.is_deleted:
+        raise NotFoundError(code="USER_NOT_FOUND", message="User not found")
+
+    if user.google_2fa_enabled:
+        raise ConflictError(
+            code="GOOGLE_2FA_ALREADY_ENABLED",
+            message="Google 2FA is already enabled",
+        )
+
+    secret = generate_totp_secret()
+    user.google_2fa_pending_secret = secret
+    await session.commit()
+
+    issuer = _totp_issuer()
+    return {
+        "secret": secret,
+        "issuer": issuer,
+        "account_name": user.nickname,
+        "provisioning_uri": build_totp_provisioning_uri(
+            secret=secret,
+            issuer=issuer,
+            account_name=user.nickname,
+        ),
+    }
+
+
+async def confirm_google_2fa_setup(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    payload: Google2FAConfirmRequest,
+) -> dict:
+    user = await users_repo.get_by_id(session, current_user.id)
+    if user is None or user.is_deleted:
+        raise NotFoundError(code="USER_NOT_FOUND", message="User not found")
+
+    if not user.google_2fa_pending_secret:
+        raise BadRequestError(
+            code="GOOGLE_2FA_SETUP_NOT_STARTED",
+            message="Google 2FA setup has not been started",
+        )
+
+    if not verify_totp_code(secret=user.google_2fa_pending_secret, code=payload.code):
+        raise BadRequestError(
+            code="INVALID_TOTP_CODE",
+            message="2FA code verification failed. Please try again later",
+        )
+
+    user.google_2fa_secret = user.google_2fa_pending_secret
+    user.google_2fa_pending_secret = None
+    user.google_2fa_enabled = True
+    user.google_2fa_confirmed_at = _now()
+    await session.commit()
+
+    return {
+        "enabled": True,
+        "confirmed_at": (
+            user.google_2fa_confirmed_at.isoformat()
+            if user.google_2fa_confirmed_at
+            else None
+        ),
+    }
+
+
+async def disable_google_2fa(
+    session: AsyncSession,
+    *,
+    current_user: User,
+) -> dict:
+    user = await users_repo.get_by_id(session, current_user.id)
+    if user is None or user.is_deleted:
+        raise NotFoundError(code="USER_NOT_FOUND", message="User not found")
+
+    user.google_2fa_enabled = False
+    user.google_2fa_secret = None
+    user.google_2fa_pending_secret = None
+    user.google_2fa_confirmed_at = None
+    await session.commit()
+
+    return {"enabled": False, "confirmed_at": None}
+
+
+async def get_google_2fa_qr_png(
+    session: AsyncSession,
+    *,
+    current_user: User,
+) -> bytes:
+    user = await users_repo.get_by_id(session, current_user.id)
+    if user is None or user.is_deleted:
+        raise NotFoundError(code="USER_NOT_FOUND", message="User not found")
+
+    if not user.google_2fa_pending_secret:
+        raise BadRequestError(
+            code="GOOGLE_2FA_SETUP_NOT_STARTED",
+            message="Google 2FA setup has not been started",
+        )
+
+    provisioning_uri = build_totp_provisioning_uri(
+        secret=user.google_2fa_pending_secret,
+        issuer=_totp_issuer(),
+        account_name=user.nickname,
+    )
+    try:
+        return render_totp_qr_png(provisioning_uri=provisioning_uri)
+    except RuntimeError as exc:
+        raise ServiceUnavailableError(
+            code="GOOGLE_2FA_QR_UNAVAILABLE",
+            message="QR code generation is temporarily unavailable",
+        ) from exc
 
 
 async def refresh_access_token(

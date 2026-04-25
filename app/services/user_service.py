@@ -3,10 +3,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.storage import (
     build_presigned_get_url,
     delete_object_if_exists,
@@ -29,6 +30,21 @@ users_repo = UsersRepository()
 devices_repo = DevicesRepository()
 
 ALLOWED_PROFILE_THEMES = {"light", "dark", "system"}
+
+
+def _normalize_nickname(nickname: str) -> str:
+    normalized = nickname.strip()
+    if not normalized:
+        raise BadRequestError(
+            code="INVALID_NICKNAME",
+            message="nickname cannot be blank",
+        )
+    return normalized
+
+
+def _is_nickname_integrity_error(exc: IntegrityError) -> bool:
+    details = str(exc.orig).lower()
+    return "nickname" in details
 
 
 def _now() -> datetime:
@@ -59,6 +75,7 @@ async def _build_profile_response(user: User) -> UserProfileResponseData:
             theme=user.theme,
             push_notifications_enabled=user.push_notifications_enabled,
             apk_update_notifications_enabled=user.apk_update_notifications_enabled,
+            google_2fa_enabled=user.google_2fa_enabled,
         ),
     )
 
@@ -179,12 +196,7 @@ async def update_my_profile(
         raise NotFoundError(code="USER_NOT_FOUND", message="User not found")
 
     if payload.nickname is not None:
-        nickname = payload.nickname.strip()
-        if not nickname:
-            raise BadRequestError(
-                code="INVALID_NICKNAME",
-                message="nickname cannot be blank",
-            )
+        nickname = _normalize_nickname(payload.nickname)
         if nickname != user.nickname:
             existing = await users_repo.get_by_nickname(session, nickname)
             if existing is not None and existing.id != user.id:
@@ -224,7 +236,16 @@ async def update_my_profile(
     if payload.apk_update_notifications_enabled is not None:
         user.apk_update_notifications_enabled = payload.apk_update_notifications_enabled
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if not _is_nickname_integrity_error(exc):
+            raise
+        raise ConflictError(
+            code="NICKNAME_ALREADY_TAKEN",
+            message="Nickname is already taken",
+        ) from exc
     await session.refresh(user)
     return await _build_profile_response(user)
 

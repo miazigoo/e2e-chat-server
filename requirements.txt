@@ -24,3 +24,4 @@ opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-sqlalchemy
 sentry-sdk[fastapi]
 firebase-admin
+qrcode[pil]

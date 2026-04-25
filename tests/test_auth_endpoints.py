@@ -55,6 +55,7 @@ def test_login_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     ) -> dict[str, Any]:
         return {
             "requires_email_code": False,
+            "requires_totp": False,
             "access_token": "access",
             "refresh_token": "refresh",
             "expires_in": 900,
@@ -74,3 +75,67 @@ def test_login_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["access_token"] == "access"
+
+
+def test_begin_google_2fa_setup_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_begin_google_2fa_setup(
+        session: Any, *, current_user: Any
+    ) -> dict[str, Any]:
+        assert current_user.id == 1
+        return {
+            "secret": "BASE32SECRET",
+            "issuer": "secure-chat-backend",
+            "account_name": "@tester",
+            "provisioning_uri": "otpauth://totp/test",
+        }
+
+    async def current_user_override() -> Any:
+        return type("User", (), {"id": 1, "nickname": "@tester"})()
+
+    monkeypatch.setattr(
+        "app.api.v1.auth.begin_google_2fa_setup",
+        fake_begin_google_2fa_setup,
+    )
+    from app.dependencies.auth import get_current_user
+    from app.main import app
+
+    app.dependency_overrides[get_current_user] = current_user_override
+    try:
+        response = client.post("/api/v1/auth/2fa/google/setup")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"]["secret"] == "BASE32SECRET"
+
+
+def test_get_google_2fa_qr_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_google_2fa_qr_png(session: Any, *, current_user: Any) -> bytes:
+        assert current_user.id == 1
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    async def current_user_override() -> Any:
+        return type("User", (), {"id": 1, "nickname": "@tester"})()
+
+    monkeypatch.setattr(
+        "app.api.v1.auth.get_google_2fa_qr_png",
+        fake_get_google_2fa_qr_png,
+    )
+    from app.dependencies.auth import get_current_user
+    from app.main import app
+
+    app.dependency_overrides[get_current_user] = current_user_override
+    try:
+        response = client.get("/api/v1/auth/2fa/google/qr")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG")

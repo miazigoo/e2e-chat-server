@@ -15,6 +15,7 @@ from app.core.exceptions import (
     UnauthorizedError,
 )
 from app.schemas.auth import (
+    Google2FAConfirmRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
@@ -39,6 +40,10 @@ def make_user(**overrides: Any) -> SimpleNamespace:
         "failed_login_stage": 0,
         "email_2fa_enabled": False,
         "email": None,
+        "google_2fa_enabled": False,
+        "google_2fa_secret": None,
+        "google_2fa_pending_secret": None,
+        "google_2fa_confirmed_at": None,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -360,6 +365,83 @@ async def test_login_success_without_2fa(
 
 
 @pytest.mark.asyncio
+async def test_login_with_google_2fa_requires_totp_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(google_2fa_enabled=True, google_2fa_secret="SECRET")
+
+    async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
+        return user
+
+    async def fake_create_login_attempt(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_commit() -> None:
+        return None
+
+    monkeypatch.setattr(
+        auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
+    )
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda password, password_hash: True
+    )
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    result = await auth_service.login_user(
+        session,
+        LoginRequest(nickname="@tester", password="supersecret123"),
+    )
+
+    assert result["requires_email_code"] is False
+    assert result["requires_totp"] is True
+
+
+@pytest.mark.asyncio
+async def test_login_with_google_2fa_invalid_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(google_2fa_enabled=True, google_2fa_secret="SECRET")
+
+    async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
+        return user
+
+    async def fake_create_login_attempt(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_commit() -> None:
+        return None
+
+    monkeypatch.setattr(
+        auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
+    )
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda password, password_hash: True
+    )
+    monkeypatch.setattr(auth_service, "verify_totp_code", lambda secret, code: False)
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    with pytest.raises(UnauthorizedError) as exc:
+        await auth_service.login_user(
+            session,
+            LoginRequest(
+                nickname="@tester",
+                password="supersecret123",
+                totp_code="123456",
+            ),
+        )
+
+    assert exc.value.code == "INVALID_TOTP_CODE"
+
+
+@pytest.mark.asyncio
 async def test_login_success_with_2fa_returns_challenge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -546,6 +628,85 @@ async def test_verify_email_code_invalid_code(
     assert exc.value.status_code == 400
     assert exc.value.code == "INVALID_EMAIL_CODE"
     assert record.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_begin_google_2fa_setup_returns_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user()
+
+    async def fake_get_by_id(session: Any, user_id: int) -> Any:
+        return user
+
+    async def fake_commit() -> None:
+        return None
+
+    monkeypatch.setattr(auth_service.users_repo, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(auth_service, "generate_totp_secret", lambda: "SECRET")
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    result = await auth_service.begin_google_2fa_setup(
+        session,
+        current_user=cast(Any, SimpleNamespace(id=1)),
+    )
+
+    assert result["secret"] == "SECRET"
+    assert user.google_2fa_pending_secret == "SECRET"
+
+
+@pytest.mark.asyncio
+async def test_confirm_google_2fa_setup_invalid_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(google_2fa_pending_secret="SECRET")
+
+    async def fake_get_by_id(session: Any, user_id: int) -> Any:
+        return user
+
+    monkeypatch.setattr(auth_service.users_repo, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(auth_service, "verify_totp_code", lambda secret, code: False)
+
+    session = cast(Any, SimpleNamespace())
+
+    with pytest.raises(BadRequestError) as exc:
+        await auth_service.confirm_google_2fa_setup(
+            session,
+            current_user=cast(Any, SimpleNamespace(id=1)),
+            payload=Google2FAConfirmRequest(code="123456"),
+        )
+
+    assert exc.value.code == "INVALID_TOTP_CODE"
+
+
+@pytest.mark.asyncio
+async def test_confirm_google_2fa_setup_enables_2fa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(google_2fa_pending_secret="SECRET")
+
+    async def fake_get_by_id(session: Any, user_id: int) -> Any:
+        return user
+
+    async def fake_commit() -> None:
+        return None
+
+    monkeypatch.setattr(auth_service.users_repo, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(auth_service, "verify_totp_code", lambda secret, code: True)
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    result = await auth_service.confirm_google_2fa_setup(
+        session,
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        payload=Google2FAConfirmRequest(code="123456"),
+    )
+
+    assert result["enabled"] is True
+    assert user.google_2fa_enabled is True
+    assert user.google_2fa_secret == "SECRET"
+    assert user.google_2fa_pending_secret is None
 
 
 @pytest.mark.asyncio
