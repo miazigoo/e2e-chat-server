@@ -1,5 +1,6 @@
 {
     auto_https disable_redirects
+    default_sni {$SERVER_IP}
 }
 
 https://{$SERVER_IP} {
