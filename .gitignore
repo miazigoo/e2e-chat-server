@@ -45,3 +45,9 @@ celerybeat-schedule
 celerybeat-schedule-shm
 celerybeat-schedule-wal
 .codex
+deploy/certs/*.crt
+deploy/certs/*.key
+deploy/certs/*.csr
+deploy/certs/*.srl
+deploy/certs/openssl-ip.cnf
+deploy/secrets/

@@ -6,10 +6,11 @@ services:
     env_file:
       - ../.env
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_HTTP_BIND:-80}:80"
+      - "${CADDY_HTTPS_BIND:-443}:443"
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/${CADDY_CONFIG:-Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
