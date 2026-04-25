@@ -108,8 +108,10 @@ services:
       mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
       mc mb -p local/${MINIO_BUCKET_ATTACHMENTS} || true &&
       mc mb -p local/${MINIO_BUCKET_TEMP} || true &&
+      mc mb -p local/${MINIO_BUCKET_ASSETS} || true &&
       mc anonymous set none local/${MINIO_BUCKET_ATTACHMENTS} &&
-      mc anonymous set none local/${MINIO_BUCKET_TEMP}
+      mc anonymous set none local/${MINIO_BUCKET_TEMP} &&
+      mc anonymous set none local/${MINIO_BUCKET_ASSETS}
       "
     networks:
       - backend
@@ -139,6 +141,8 @@ services:
       - ../.env
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    volumes:
+      - ./secrets/fcm_service_account.json:/run/secrets/fcm_service_account.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,6 +183,8 @@ services:
       - ../.env
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    volumes:
+      - ./secrets/fcm_service_account.json:/run/secrets/fcm_service_account.json:ro
     command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
     depends_on:
       postgres:
@@ -331,7 +337,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
-      GF_SERVER_ROOT_URL: https://grafana.${CADDY_DOMAIN}
+      # Grafana is bound to localhost only by default. Publish it separately if needed.
+      GF_SERVER_ROOT_URL: http://127.0.0.1:3000
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
