@@ -94,6 +94,7 @@ async def create_conversation(
     protection_mode: ProtectionMode = ProtectionMode.NORMAL,
     message_ttl_days: int | None = 60,
     delete_after_read_seconds: int | None = None,
+    is_saved_messages: bool = False,
 ) -> Conversation:
     conversation = Conversation(
         user_a_id=min(user_a_id, user_b_id),
@@ -103,6 +104,7 @@ async def create_conversation(
         protection_mode=protection_mode,
         message_ttl_days=message_ttl_days,
         delete_after_read_seconds=delete_after_read_seconds,
+        is_saved_messages=is_saved_messages,
     )
     session.add(conversation)
     await session.flush()
@@ -113,12 +115,13 @@ async def create_conversation(
             user_id=user_a_id,
         )
     )
-    session.add(
-        ConversationParticipant(
-            conversation_id=conversation.id,
-            user_id=user_b_id,
+    if user_b_id != user_a_id:
+        session.add(
+            ConversationParticipant(
+                conversation_id=conversation.id,
+                user_id=user_b_id,
+            )
         )
-    )
     await session.flush()
 
     return conversation

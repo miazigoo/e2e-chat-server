@@ -95,6 +95,13 @@ def _other_participant_id(
     return conversation_user_a_id
 
 
+def _is_self_conversation(*, conversation: Any) -> bool:
+    return bool(
+        getattr(conversation, "is_saved_messages", False)
+        or conversation.user_a_id == conversation.user_b_id
+    )
+
+
 def _resolve_expires_at(
     *,
     explicit_expires_at: datetime | None,
@@ -442,6 +449,8 @@ async def send_message(
         session,
         user_id=payload.recipient_user_id,
     )
+    if _is_self_conversation(conversation=conversation):
+        recipient_device = current_device
     if not recipient_device:
         raise ConflictError(
             code="RECIPIENT_DEVICE_NOT_READY",
@@ -536,12 +545,25 @@ async def send_message(
         has_attachments=bool(payload.attachment_ids),
     )
 
-    await messages_repo.create_recipient_state(
+    recipient_state = await messages_repo.create_recipient_state(
         session,
         message_id=message.id,
         recipient_user_id=payload.recipient_user_id,
         recipient_device_id=recipient_device.id,
     )
+    if _is_self_conversation(conversation=conversation):
+        await messages_repo.mark_delivered(
+            session,
+            message=message,
+            state=recipient_state,
+            delivered_at=now_dt,
+        )
+        await messages_repo.mark_read(
+            session,
+            message=message,
+            state=recipient_state,
+            read_at=now_dt,
+        )
 
     if attachments:
         await files_repo.link_attachments_to_message(
@@ -596,12 +618,13 @@ async def send_message(
         extra={"recipient_user_id": payload.recipient_user_id},
     )
 
-    _enqueue_push_notification(
-        user_id=payload.recipient_user_id,
-        conversation_id=conversation.id,
-        message_id=message.id,
-    )
-    _enqueue_recompute_unread(payload.recipient_user_id)
+    if not _is_self_conversation(conversation=conversation):
+        _enqueue_push_notification(
+            user_id=payload.recipient_user_id,
+            conversation_id=conversation.id,
+            message_id=message.id,
+        )
+        _enqueue_recompute_unread(payload.recipient_user_id)
     _enqueue_recompute_unread(current_user.id)
 
     realtime_payload = _event_to_realtime_payload(
@@ -616,7 +639,11 @@ async def send_message(
         created_at=event.created_at,
     )
     await realtime_hub.publish_conversation_event(conversation.id, realtime_payload)
-    await realtime_hub.publish_user_event(payload.recipient_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(
+            payload.recipient_user_id,
+            realtime_payload,
+        )
 
     return {
         "message_id": message.id,
@@ -819,6 +846,8 @@ async def forward_messages(
         session,
         user_id=payload.recipient_user_id,
     )
+    if _is_self_conversation(conversation=conversation):
+        recipient_device = current_device
     if recipient_device is None:
         raise ConflictError(
             code="RECIPIENT_DEVICE_NOT_READY",
@@ -867,12 +896,25 @@ async def forward_messages(
             auto_delete_after_read_seconds=conversation.delete_after_read_seconds,
             has_attachments=source_message.has_attachments,
         )
-        await messages_repo.create_recipient_state(
+        recipient_state = await messages_repo.create_recipient_state(
             session,
             message_id=forwarded_message.id,
             recipient_user_id=payload.recipient_user_id,
             recipient_device_id=recipient_device.id,
         )
+        if _is_self_conversation(conversation=conversation):
+            await messages_repo.mark_delivered(
+                session,
+                message=forwarded_message,
+                state=recipient_state,
+                delivered_at=client_created_at,
+            )
+            await messages_repo.mark_read(
+                session,
+                message=forwarded_message,
+                state=recipient_state,
+                read_at=client_created_at,
+            )
         if source_message.has_attachments:
             await _clone_forward_attachments(
                 session,
@@ -931,20 +973,23 @@ async def forward_messages(
     )
     await session.commit()
 
-    _enqueue_recompute_unread(payload.recipient_user_id)
+    if not _is_self_conversation(conversation=conversation):
+        _enqueue_recompute_unread(payload.recipient_user_id)
     _enqueue_recompute_unread(current_user.id)
 
     for item, realtime_payload in zip(created_items, realtime_payloads, strict=False):
-        _enqueue_push_notification(
-            user_id=payload.recipient_user_id,
-            conversation_id=conversation.id,
-            message_id=item["message_id"],
-        )
+        if not _is_self_conversation(conversation=conversation):
+            _enqueue_push_notification(
+                user_id=payload.recipient_user_id,
+                conversation_id=conversation.id,
+                message_id=item["message_id"],
+            )
         await realtime_hub.publish_conversation_event(conversation.id, realtime_payload)
-        await realtime_hub.publish_user_event(
-            payload.recipient_user_id,
-            realtime_payload,
-        )
+        if not _is_self_conversation(conversation=conversation):
+            await realtime_hub.publish_user_event(
+                payload.recipient_user_id,
+                realtime_payload,
+            )
 
     return {
         "conversation_id": conversation.id,
@@ -1020,7 +1065,8 @@ async def pin_message(
         created_at=event.created_at,
     )
     await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return PinMessageResponseData(
         conversation_id=conversation_id,
@@ -1081,7 +1127,8 @@ async def unpin_message(
         created_at=event.created_at,
     )
     await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return PinMessageResponseData(
         conversation_id=conversation_id,
@@ -1168,7 +1215,8 @@ async def mark_read(
     )
 
     _enqueue_recompute_unread(current_user.id)
-    _enqueue_recompute_unread(message.sender_user_id)
+    if message.sender_user_id != current_user.id:
+        _enqueue_recompute_unread(message.sender_user_id)
 
     realtime_payload = _event_to_realtime_payload(
         conversation_id=message.conversation_id,
@@ -1184,7 +1232,11 @@ async def mark_read(
     await realtime_hub.publish_conversation_event(
         message.conversation_id, realtime_payload
     )
-    await realtime_hub.publish_user_event(message.sender_user_id, realtime_payload)
+    if message.sender_user_id != current_user.id:
+        await realtime_hub.publish_user_event(
+            message.sender_user_id,
+            realtime_payload,
+        )
 
     return {
         "message_id": message.id,
@@ -1368,7 +1420,8 @@ async def delete_global(
         },
     )
     _enqueue_recompute_unread(current_user.id)
-    _enqueue_recompute_unread(peer_user_id)
+    if not _is_self_conversation(conversation=conversation):
+        _enqueue_recompute_unread(peer_user_id)
 
     realtime_payload = _event_to_realtime_payload(
         conversation_id=payload.conversation_id,
@@ -1384,7 +1437,8 @@ async def delete_global(
     await realtime_hub.publish_conversation_event(
         payload.conversation_id, realtime_payload
     )
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {
         "deleted": True,
@@ -1459,7 +1513,8 @@ async def set_message_reaction(
     await realtime_hub.publish_conversation_event(
         message.conversation_id, realtime_payload
     )
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {
         "message_id": message.id,
@@ -1530,7 +1585,8 @@ async def delete_message_reaction(
     await realtime_hub.publish_conversation_event(
         message.conversation_id, realtime_payload
     )
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {"message_id": message.id, "removed": True}
 
@@ -1617,7 +1673,11 @@ async def mark_delivered(
     await realtime_hub.publish_conversation_event(
         message.conversation_id, realtime_payload
     )
-    await realtime_hub.publish_user_event(message.sender_user_id, realtime_payload)
+    if message.sender_user_id != current_user.id:
+        await realtime_hub.publish_user_event(
+            message.sender_user_id,
+            realtime_payload,
+        )
 
     return {
         "message_id": message.id,

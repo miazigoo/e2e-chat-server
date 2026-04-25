@@ -7,7 +7,8 @@ from app.core.audit import audit_log
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
 from app.core.realtime import realtime_hub
 from app.core.task_dispatch import dispatch_background_task
-from app.models.chat_enums import EventType
+from app.models.chat_enums import EventType, ProtectionMode
+from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
@@ -30,6 +31,7 @@ users_repo = UsersRepository()
 conversations_repo = ConversationsRepository()
 messages_repo = MessagesRepository()
 files_repo = FilesRepository()
+SAVED_MESSAGES_TITLE = "Избранное"
 
 
 def _now() -> datetime:
@@ -58,6 +60,47 @@ def _peer_user_id(
     if conversation_user_a_id == current_user_id:
         return conversation_user_b_id
     return conversation_user_a_id
+
+
+def _display_title(title: str | None, *, is_saved_messages: bool) -> str | None:
+    if is_saved_messages:
+        return SAVED_MESSAGES_TITLE
+    return title
+
+
+def _is_self_conversation(*, conversation: Conversation) -> bool:
+    return (
+        conversation.is_saved_messages
+        or conversation.user_a_id == conversation.user_b_id
+    )
+
+
+async def _get_or_create_saved_messages(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    message_ttl_days: int | None = 60,
+    delete_after_read_seconds: int | None = None,
+) -> tuple[Conversation, bool]:
+    existing = await conversations_repo.get_saved_messages_for_user(
+        session,
+        user_id=current_user.id,
+    )
+    if existing is not None:
+        return existing, False
+
+    conversation = await conversations_repo.create_conversation(
+        session,
+        user_a_id=current_user.id,
+        user_b_id=current_user.id,
+        created_by_user_id=current_user.id,
+        title=SAVED_MESSAGES_TITLE,
+        protection_mode=ProtectionMode.NORMAL,
+        message_ttl_days=message_ttl_days,
+        delete_after_read_seconds=delete_after_read_seconds,
+        is_saved_messages=True,
+    )
+    return conversation, True
 
 
 def _ensure_conversation_mutable(*, is_purged: bool, is_active: bool) -> None:
@@ -123,10 +166,22 @@ async def create_conversation(
     payload: CreateConversationRequest,
 ) -> dict:
     if payload.recipient_user_id == current_user.id:
-        raise BadRequestError(
-            code="SELF_CONVERSATION_NOT_ALLOWED",
-            message="Cannot create conversation with yourself",
+        conversation, created = await _get_or_create_saved_messages(
+            session,
+            current_user=current_user,
+            message_ttl_days=payload.message_ttl_days,
+            delete_after_read_seconds=payload.delete_after_read_seconds,
         )
+        if created:
+            await session.commit()
+
+        return {
+            "conversation_id": conversation.id,
+            "conversation_uuid": conversation.conversation_uuid,
+            "recipient_user_id": current_user.id,
+            "protection_mode": conversation.protection_mode.value,
+            "is_saved_messages": True,
+        }
 
     recipient = await users_repo.get_by_id(session, payload.recipient_user_id)
     if not recipient or recipient.is_deleted or recipient.pending_deletion:
@@ -153,6 +208,7 @@ async def create_conversation(
         "conversation_uuid": conversation.conversation_uuid,
         "recipient_user_id": recipient.id,
         "protection_mode": conversation.protection_mode.value,
+        "is_saved_messages": False,
     }
 
 
@@ -161,6 +217,13 @@ async def list_conversations(
     *,
     current_user: User,
 ) -> ListConversationsResponseData:
+    _, created_saved_messages = await _get_or_create_saved_messages(
+        session,
+        current_user=current_user,
+    )
+    if created_saved_messages:
+        await session.commit()
+
     rows = await conversations_repo.list_overview_for_user(
         session,
         user_id=current_user.id,
@@ -190,7 +253,11 @@ async def list_conversations(
             ConversationListItemSchema(
                 conversation_id=conversation.id,
                 conversation_uuid=conversation.conversation_uuid,
-                title=conversation.title,
+                title=_display_title(
+                    conversation.title,
+                    is_saved_messages=conversation.is_saved_messages,
+                ),
+                is_saved_messages=conversation.is_saved_messages,
                 protection_mode=conversation.protection_mode,
                 message_ttl_days=conversation.message_ttl_days,
                 delete_after_read_seconds=conversation.delete_after_read_seconds,
@@ -273,8 +340,12 @@ async def get_conversation(
     return {
         "conversation_id": conversation.id,
         "conversation_uuid": conversation.conversation_uuid,
-        "title": conversation.title,
+        "title": _display_title(
+            conversation.title,
+            is_saved_messages=conversation.is_saved_messages,
+        ),
         "peer_user_id": peer_user_id,
+        "is_saved_messages": conversation.is_saved_messages,
         "protection_mode": conversation.protection_mode.value,
         "message_ttl_days": conversation.message_ttl_days,
         "delete_after_read_seconds": conversation.delete_after_read_seconds,
@@ -294,7 +365,11 @@ async def get_conversation(
         ),
         "is_active": conversation.is_active,
         "is_purged": conversation.is_purged,
-        "pinned_message": _preview_from_message(pinned_message),
+        "pinned_message": (
+            _preview_from_message(pinned_message)
+            if pinned_message is not None
+            else None
+        ),
     }
 
 
@@ -612,7 +687,8 @@ async def clear_global(
         },
     )
     _enqueue_recompute_unread(current_user.id)
-    _enqueue_recompute_unread(peer_user_id)
+    if not _is_self_conversation(conversation=conversation):
+        _enqueue_recompute_unread(peer_user_id)
 
     realtime_payload = _event_to_realtime_payload(
         conversation_id=conversation_id,
@@ -626,7 +702,8 @@ async def clear_global(
         created_at=event.created_at,
     )
     await realtime_hub.publish_conversation_event(conversation_id, realtime_payload)
-    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+    if not _is_self_conversation(conversation=conversation):
+        await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
 
     return {
         "conversation_id": conversation_id,

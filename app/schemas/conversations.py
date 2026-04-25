@@ -46,6 +46,7 @@ class CreateConversationResponseData(BaseModel):
     conversation_uuid: str
     recipient_user_id: int
     protection_mode: str
+    is_saved_messages: bool = False
 
 
 class GetConversationResponseData(BaseModel):
@@ -53,6 +54,7 @@ class GetConversationResponseData(BaseModel):
     conversation_uuid: str
     title: str | None = None
     peer_user_id: int
+    is_saved_messages: bool = False
     protection_mode: str
     message_ttl_days: int | None = None
     delete_after_read_seconds: int | None = None
@@ -107,6 +109,7 @@ class ConversationListItemSchema(BaseModel):
     conversation_id: int
     conversation_uuid: str
     title: str | None = None
+    is_saved_messages: bool = False
     protection_mode: ProtectionMode
     message_ttl_days: int | None = None
     delete_after_read_seconds: int | None = None

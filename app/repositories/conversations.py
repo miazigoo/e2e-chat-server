@@ -24,6 +24,7 @@ class ConversationsRepository:
         protection_mode: ProtectionMode,
         message_ttl_days: int | None,
         delete_after_read_seconds: int | None,
+        is_saved_messages: bool = False,
     ) -> Conversation:
         ordered_a, ordered_b = sorted((user_a_id, user_b_id))
 
@@ -35,6 +36,7 @@ class ConversationsRepository:
             protection_mode=protection_mode,
             message_ttl_days=message_ttl_days,
             delete_after_read_seconds=delete_after_read_seconds,
+            is_saved_messages=is_saved_messages,
         )
         session.add(conversation)
         await session.flush()
@@ -45,15 +47,31 @@ class ConversationsRepository:
                 user_id=user_a_id,
             )
         )
-        session.add(
-            ConversationParticipant(
-                conversation_id=conversation.id,
-                user_id=user_b_id,
+        if user_b_id != user_a_id:
+            session.add(
+                ConversationParticipant(
+                    conversation_id=conversation.id,
+                    user_id=user_b_id,
+                )
             )
-        )
         await session.flush()
 
         return conversation
+
+    async def get_saved_messages_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+    ) -> Conversation | None:
+        result = await session.execute(
+            select(Conversation).where(
+                Conversation.user_a_id == user_id,
+                Conversation.user_b_id == user_id,
+                Conversation.is_saved_messages.is_(True),
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def get_by_id(
         self,

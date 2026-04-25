@@ -5,7 +5,7 @@ from typing import Any, cast
 import pytest
 
 import app.services.conversation_service as conversation_service
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import NotFoundError
 from app.schemas.conversations import (
     ClearConversationRequest,
     CreateConversationRequest,
@@ -18,23 +18,55 @@ def _dt() -> datetime:
 
 
 @pytest.mark.asyncio
-async def test_create_conversation_with_self_forbidden() -> None:
-    session = cast(Any, SimpleNamespace())
+async def test_create_conversation_with_self_returns_saved_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_saved_messages_for_user(session: Any, user_id: int) -> Any:
+        return None
 
-    with pytest.raises(BadRequestError) as exc:
-        await conversation_service.create_conversation(
-            session,
-            current_user=cast(Any, SimpleNamespace(id=1)),
-            payload=CreateConversationRequest(
-                recipient_user_id=1,
-                title="self",
-                protection_mode="normal",
-                message_ttl_days=60,
-            ),
+    async def fake_create_conversation(session: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            id=10,
+            conversation_uuid="saved-messages-uuid",
+            protection_mode=SimpleNamespace(value="normal"),
+            is_saved_messages=True,
         )
 
-    assert exc.value.status_code == 400
-    assert exc.value.code == "SELF_CONVERSATION_NOT_ALLOWED"
+    monkeypatch.setattr(
+        conversation_service.conversations_repo,
+        "get_saved_messages_for_user",
+        fake_get_saved_messages_for_user,
+    )
+    monkeypatch.setattr(
+        conversation_service.conversations_repo,
+        "create_conversation",
+        fake_create_conversation,
+    )
+
+    session = cast(Any, SimpleNamespace())
+    committed = False
+
+    async def fake_commit() -> None:
+        nonlocal committed
+        committed = True
+
+    session.commit = fake_commit
+
+    result = await conversation_service.create_conversation(
+        session,
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        payload=CreateConversationRequest(
+            recipient_user_id=1,
+            title="self",
+            protection_mode="normal",
+            message_ttl_days=60,
+        ),
+    )
+
+    assert committed is True
+    assert result["conversation_id"] == 10
+    assert result["recipient_user_id"] == 1
+    assert result["is_saved_messages"] is True
 
 
 @pytest.mark.asyncio

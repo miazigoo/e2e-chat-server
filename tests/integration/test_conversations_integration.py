@@ -37,3 +37,20 @@ async def test_create_conversation_creates_participants(session: AsyncSession) -
     assert len(participants) == 2
     participant_ids = {item.user_id for item in participants}
     assert participant_ids == {user1.id, user2.id}
+
+
+async def test_list_conversations_auto_creates_saved_messages(
+    session: AsyncSession,
+) -> None:
+    from app.services.conversation_service import list_conversations
+
+    user = await create_user(session, nickname="@solo")
+    await session.commit()
+
+    result = await list_conversations(session, current_user=user)
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.is_saved_messages is True
+    assert item.title == "Избранное"
+    assert item.peer.user_id == user.id

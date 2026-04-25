@@ -24,6 +24,7 @@ def _conversation(**overrides: Any) -> SimpleNamespace:
         "id": 1,
         "user_a_id": 1,
         "user_b_id": 2,
+        "is_saved_messages": False,
         "is_purged": False,
         "is_active": True,
         "message_ttl_days": 60,
@@ -262,6 +263,186 @@ async def test_send_message_when_recipient_has_no_device(
 
     assert exc.value.status_code == 409
     assert exc.value.code == "RECIPIENT_DEVICE_NOT_READY"
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_saved_messages_uses_current_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = _conversation(user_b_id=1, is_saved_messages=True)
+    current_device = _device(id=77, user_id=1)
+    committed = False
+
+    async def fake_get_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return conversation
+
+    async def fake_get_active_by_user_id(session: Any, user_id: int) -> Any:
+        return None
+
+    async def fake_get_by_message_uuid(
+        session: Any,
+        conversation_id: int,
+        sender_user_id: int,
+        message_uuid: str,
+    ) -> Any:
+        return None
+
+    async def fake_create_message(session: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            id=100,
+            message_uuid=kwargs["message_uuid"],
+            conversation_id=kwargs["conversation_id"],
+            recipient_user_id=kwargs["recipient_user_id"],
+            recipient_device_id=kwargs["recipient_device_id"],
+            server_received_at=_now(),
+            sender_user_id=kwargs["sender_user_id"],
+            sender_device_id=kwargs["sender_device_id"],
+            reply_to_message_id=None,
+            message_type=SimpleNamespace(value="text"),
+            encryption_mode=SimpleNamespace(value="signal"),
+            has_attachments=False,
+            client_created_at=kwargs["client_created_at"],
+            read_at=None,
+            delivered_at=None,
+        )
+
+    async def fake_create_recipient_state(session: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            message_id=kwargs["message_id"],
+            recipient_device_id=kwargs["recipient_device_id"],
+        )
+
+    async def fake_mark_delivered(
+        session: Any,
+        *,
+        message: Any,
+        state: Any,
+        delivered_at: Any,
+    ) -> None:
+        message.delivered_at = delivered_at
+
+    async def fake_mark_read(
+        session: Any,
+        *,
+        message: Any,
+        state: Any,
+        read_at: Any,
+    ) -> None:
+        message.read_at = read_at
+
+    async def fake_create_event(session: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            id=1,
+            event_uuid="event-uuid",
+            event_type=SimpleNamespace(value="message_created"),
+            actor_user_id=1,
+            actor_device_id=current_device.id,
+            target_message_id=100,
+            payload={},
+            created_at=_now(),
+        )
+
+    async def fake_touch_conversation(
+        session: Any,
+        *,
+        conversation: Any,
+        touched_at: Any,
+    ) -> None:
+        conversation.updated_at = touched_at
+
+    async def fake_publish_conversation_event(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def fake_publish_user_event(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_for_user",
+        fake_get_for_user,
+    )
+    monkeypatch.setattr(
+        message_service.devices_repo,
+        "get_active_by_user_id",
+        fake_get_active_by_user_id,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "get_by_message_uuid",
+        fake_get_by_message_uuid,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "create_message",
+        fake_create_message,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "create_recipient_state",
+        fake_create_recipient_state,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "mark_delivered",
+        fake_mark_delivered,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "mark_read",
+        fake_mark_read,
+    )
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "create_event",
+        fake_create_event,
+    )
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "touch_conversation",
+        fake_touch_conversation,
+    )
+    monkeypatch.setattr(
+        message_service.realtime_hub,
+        "publish_conversation_event",
+        fake_publish_conversation_event,
+    )
+    monkeypatch.setattr(
+        message_service.realtime_hub,
+        "publish_user_event",
+        fake_publish_user_event,
+    )
+    _patch_participant(monkeypatch)
+
+    async def fake_commit() -> None:
+        nonlocal committed
+        committed = True
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    result = await message_service.send_message(
+        session,
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        current_device=cast(Any, current_device),
+        payload=SendMessageRequest(
+            conversation_id=1,
+            recipient_user_id=1,
+            message_uuid=str(uuid4()),
+            message_type="text",
+            ciphertext="cipher",
+            ciphertext_version=1,
+            encryption_mode="signal",
+            nonce="nonce",
+            client_created_at=_now(),
+        ),
+    )
+
+    assert committed is True
+    assert result["recipient_user_id"] == 1
+    assert result["recipient_device_id"] == 77
 
 
 @pytest.mark.asyncio

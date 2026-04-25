@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import NotFoundError
 from app.schemas.conversations import CreateConversationRequest
 from app.services.conversation_service import (
     create_conversation as create_conversation_service,
@@ -11,24 +11,32 @@ from tests.integration.helpers import create_conversation as create_conversation
 from tests.integration.helpers import create_user
 
 
-async def test_create_conversation_with_self_forbidden(session: AsyncSession) -> None:
+async def test_create_conversation_with_self_creates_saved_messages(
+    session: AsyncSession,
+) -> None:
     user = await create_user(session, nickname="@u1")
     await session.commit()
 
-    with pytest.raises(BadRequestError) as exc:
-        await create_conversation_service(
-            session,
-            current_user=user,
-            payload=CreateConversationRequest(
-                recipient_user_id=user.id,
-                title="Self chat",
-                message_ttl_days=30,
-            ),
-        )
+    result = await create_conversation_service(
+        session,
+        current_user=user,
+        payload=CreateConversationRequest(
+            recipient_user_id=user.id,
+            title="Self chat",
+            message_ttl_days=30,
+        ),
+    )
 
-    assert exc.value.status_code == 400
-    assert exc.value.code == "SELF_CONVERSATION_NOT_ALLOWED"
-    assert exc.value.message == "Cannot create conversation with yourself"
+    saved = await get_conversation(
+        session,
+        current_user=user,
+        conversation_id=result["conversation_id"],
+    )
+
+    assert result["recipient_user_id"] == user.id
+    assert result["is_saved_messages"] is True
+    assert saved["is_saved_messages"] is True
+    assert saved["title"] == "Избранное"
 
 
 async def test_get_conversation_for_non_participant_fails(

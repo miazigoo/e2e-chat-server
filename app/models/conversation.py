@@ -55,6 +55,11 @@ class Conversation(Base):
         ForeignKey("messages.id", ondelete="SET NULL"),
         nullable=True,
     )
+    is_saved_messages: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
 
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)
     is_purged: Mapped[bool] = mapped_column(nullable=False, default=False)
@@ -75,13 +80,19 @@ class Conversation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "user_a_id <> user_b_id", name="ck_conversations_distinct_users"
+            "("
+            "(is_saved_messages = TRUE AND user_a_id = user_b_id)"
+            " OR "
+            "(is_saved_messages = FALSE AND user_a_id <> user_b_id)"
+            ")",
+            name="ck_conversations_user_shape",
         ),
         Index("ix_conversations_user_a", "user_a_id"),
         Index("ix_conversations_user_b", "user_b_id"),
         Index("ix_conversations_pair", "user_a_id", "user_b_id"),
         Index("ix_conversations_updated_at", "updated_at"),
         Index("ix_conversations_pinned_message_id", "pinned_message_id"),
+        Index("ix_conversations_is_saved_messages", "is_saved_messages"),
     )
 
 
