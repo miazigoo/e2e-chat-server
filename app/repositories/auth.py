@@ -94,3 +94,16 @@ class AuthRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def delete_email_code_by_challenge(
+        self,
+        session: AsyncSession,
+        *,
+        login_challenge_id: str,
+    ) -> bool:
+        result = await session.execute(
+            delete(AuthEmailCode)
+            .where(AuthEmailCode.login_challenge_id == login_challenge_id)
+            .returning(AuthEmailCode.id)
+        )
+        return result.scalar_one_or_none() is not None

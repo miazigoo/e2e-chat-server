@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.email import send_login_code_email
 from app.core.exceptions import (
     BadRequestError,
     ConflictError,
@@ -432,6 +433,20 @@ async def login_user(
         )
 
         await session.commit()
+
+        try:
+            await send_login_code_email(
+                recipient_email=user.email,
+                recipient_nickname=user.nickname,
+                code=code,
+            )
+        except ServiceUnavailableError:
+            await auth_repo.delete_email_code_by_challenge(
+                session,
+                login_challenge_id=login_challenge_id,
+            )
+            await session.commit()
+            raise
 
         response = {
             "requires_email_code": True,

@@ -53,6 +53,37 @@ async def test_register_user_persists_user(session: AsyncSession) -> None:
     assert result["requires_device_registration"] is True
 
 
+async def test_register_then_login_with_same_password_returns_bootstrap(
+    session: AsyncSession,
+) -> None:
+    nickname = "@register-login-check"
+    password = "supersecret123"
+
+    register_result = await register_user(
+        session,
+        RegisterRequest(
+            nickname=nickname,
+            password=password,
+            email=None,
+            email_2fa_enabled=False,
+        ),
+    )
+
+    login_result = await login_user(
+        session,
+        LoginRequest(
+            nickname=nickname,
+            password=password,
+        ),
+    )
+
+    assert register_result["nickname"] == nickname
+    assert login_result["requires_email_code"] is False
+    assert login_result["requires_bootstrap"] is True
+    assert "bootstrap_token" in login_result
+    assert "access_token" not in login_result
+
+
 async def test_register_user_duplicate_nickname(session: AsyncSession) -> None:
     await create_user(session, nickname="@dup")
     await session.commit()

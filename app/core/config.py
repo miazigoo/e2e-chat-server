@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     email_code_expire_minutes: int = Field(
         default=10, alias="EMAIL_CODE_EXPIRE_MINUTES"
     )
+    smtp_host: Optional[str] = Field(default=None, alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_username: Optional[str] = Field(default=None, alias="SMTP_USERNAME")
+    smtp_password: Optional[str] = Field(default=None, alias="SMTP_PASSWORD")
+    smtp_from_email: Optional[str] = Field(default=None, alias="SMTP_FROM_EMAIL")
+    smtp_from_name: Optional[str] = Field(default=None, alias="SMTP_FROM_NAME")
+    smtp_starttls: bool = Field(default=True, alias="SMTP_STARTTLS")
+    smtp_use_ssl: bool = Field(default=False, alias="SMTP_USE_SSL")
+    smtp_timeout_seconds: int = Field(default=10, alias="SMTP_TIMEOUT_SECONDS")
     allow_debug_email_codes: bool = Field(
         default=False,
         alias="ALLOW_DEBUG_EMAIL_CODES",
@@ -98,6 +107,12 @@ class Settings(BaseSettings):
             return ["*"]
         return [item.strip() for item in raw.split(",") if item.strip()]
 
+    @property
+    def email_delivery_enabled(self) -> bool:
+        return bool(
+            (self.smtp_host or "").strip() and (self.smtp_from_email or "").strip()
+        )
+
     @model_validator(mode="after")
     def validate_prod_cors(self) -> "Settings":
         if self.app_env == "production" and self.backend_cors_origins == ["*"]:
@@ -116,6 +131,28 @@ class Settings(BaseSettings):
             raise ValueError("EMAIL_CODE_MAX_ATTEMPTS must be >= 1")
         if self.email_code_expire_minutes < 1:
             raise ValueError("EMAIL_CODE_EXPIRE_MINUTES must be >= 1")
+        if self.smtp_port < 1:
+            raise ValueError("SMTP_PORT must be >= 1")
+        if self.smtp_timeout_seconds < 1:
+            raise ValueError("SMTP_TIMEOUT_SECONDS must be >= 1")
+        if self.smtp_use_ssl and self.smtp_starttls:
+            raise ValueError("SMTP_USE_SSL and SMTP_STARTTLS cannot both be enabled")
+        if (
+            any(
+                value
+                for value in (
+                    self.smtp_host,
+                    self.smtp_username,
+                    self.smtp_password,
+                    self.smtp_from_email,
+                    self.smtp_from_name,
+                )
+            )
+            and not self.email_delivery_enabled
+        ):
+            raise ValueError(
+                "SMTP_HOST and SMTP_FROM_EMAIL are required when SMTP is configured"
+            )
         return self
 
 

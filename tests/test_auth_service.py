@@ -12,6 +12,7 @@ from app.core.exceptions import (
     ForbiddenError,
     LockedError,
     NotFoundError,
+    ServiceUnavailableError,
     UnauthorizedError,
 )
 from app.schemas.auth import (
@@ -485,6 +486,24 @@ async def test_login_success_with_2fa_returns_challenge(
         auth_service, "verify_password", lambda password, password_hash: True
     )
     monkeypatch.setattr(auth_service, "_generate_email_code", lambda: "123456")
+    sent_email: dict[str, str] = {}
+
+    async def fake_send_login_code_email(
+        *, recipient_email: str, recipient_nickname: str, code: str
+    ) -> None:
+        sent_email.update(
+            {
+                "recipient_email": recipient_email,
+                "recipient_nickname": recipient_nickname,
+                "code": code,
+            }
+        )
+
+    monkeypatch.setattr(
+        auth_service,
+        "send_login_code_email",
+        fake_send_login_code_email,
+    )
 
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
@@ -497,6 +516,11 @@ async def test_login_success_with_2fa_returns_challenge(
     assert "login_challenge_id" in result
     assert result["email_masked"] == "t***@example.com"
     assert "debug_code" not in result
+    assert sent_email == {
+        "recipient_email": "tester@example.com",
+        "recipient_nickname": "@tester",
+        "code": "123456",
+    }
 
 
 @pytest.mark.asyncio
@@ -544,6 +568,17 @@ async def test_login_success_with_2fa_returns_debug_code_when_explicitly_enabled
     monkeypatch.setattr(auth_service, "_generate_email_code", lambda: "123456")
     monkeypatch.setattr(settings, "allow_debug_email_codes", True)
 
+    async def fake_send_login_code_email(
+        *, recipient_email: str, recipient_nickname: str, code: str
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        auth_service,
+        "send_login_code_email",
+        fake_send_login_code_email,
+    )
+
     session = cast(Any, SimpleNamespace(commit=fake_commit))
 
     result = await auth_service.login_user(
@@ -553,6 +588,90 @@ async def test_login_success_with_2fa_returns_debug_code_when_explicitly_enabled
 
     assert result["requires_email_code"] is True
     assert result["debug_code"] == "123456"
+
+
+@pytest.mark.asyncio
+async def test_login_email_2fa_send_failure_deletes_challenge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = make_user(
+        failed_login_stage=0,
+        email_2fa_enabled=True,
+        email="tester@example.com",
+    )
+    deleted_challenge: dict[str, str] = {}
+    commit_calls = 0
+
+    async def fake_get_by_nickname(session: Any, nickname: str) -> Any:
+        return user
+
+    async def fake_create_login_attempt(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_create_email_code(session: Any, **kwargs: Any) -> Any:
+        return None
+
+    async def fake_invalidate_active_email_codes(session: Any, user_id: int) -> int:
+        return 0
+
+    async def fake_delete_email_code_by_challenge(
+        session: Any, login_challenge_id: str
+    ) -> bool:
+        deleted_challenge["login_challenge_id"] = login_challenge_id
+        return True
+
+    async def fake_commit() -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+
+    async def fake_send_login_code_email(
+        *, recipient_email: str, recipient_nickname: str, code: str
+    ) -> None:
+        raise ServiceUnavailableError(
+            code="EMAIL_DELIVERY_FAILED",
+            message="Could not deliver verification code",
+        )
+
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "invalidate_active_email_codes",
+        fake_invalidate_active_email_codes,
+    )
+    monkeypatch.setattr(
+        auth_service.users_repo, "get_by_nickname", fake_get_by_nickname
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_login_attempt", fake_create_login_attempt
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo, "create_email_code", fake_create_email_code
+    )
+    monkeypatch.setattr(
+        auth_service.auth_repo,
+        "delete_email_code_by_challenge",
+        fake_delete_email_code_by_challenge,
+    )
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda password, password_hash: True
+    )
+    monkeypatch.setattr(auth_service, "_generate_email_code", lambda: "123456")
+    monkeypatch.setattr(
+        auth_service,
+        "send_login_code_email",
+        fake_send_login_code_email,
+    )
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    with pytest.raises(ServiceUnavailableError) as exc:
+        await auth_service.login_user(
+            session,
+            LoginRequest(nickname="@tester", password="supersecret123"),
+        )
+
+    assert exc.value.code == "EMAIL_DELIVERY_FAILED"
+    assert "login_challenge_id" in deleted_challenge
+    assert commit_calls == 2
 
 
 @pytest.mark.asyncio

@@ -182,6 +182,8 @@ Body:
 ```
 
 `debug_code` is intentionally disabled by default and should only be enabled in non-production via `ALLOW_DEBUG_EMAIL_CODES=true`.
+To actually deliver email 2FA codes, configure SMTP with `SMTP_HOST` and
+`SMTP_FROM_EMAIL` plus optional `SMTP_USERNAME` / `SMTP_PASSWORD`.
 
 ### 4. Verify email code
 #### Request
