@@ -1047,7 +1047,7 @@ async def pin_message(
         payload={
             "message_id": message.id,
             "pinned_message_id": message.id,
-            "preview": _preview_from_message(message),
+            "preview": _preview_from_message(message).model_dump(mode="json"),
         },
     )
     await session.commit()

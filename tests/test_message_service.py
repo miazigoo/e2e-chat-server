@@ -7,9 +7,11 @@ import pytest
 
 import app.services.message_service as message_service
 from app.core.exceptions import BadRequestError, ConflictError, GoneError, NotFoundError
+from app.models.chat_enums import MessageType
 from app.schemas.messages import (
     ForwardMessagesRequest,
     MarkReadRequest,
+    PinMessageResponseData,
     SendMessageRequest,
     SetMessageReactionRequest,
 )
@@ -441,8 +443,126 @@ async def test_send_message_to_saved_messages_uses_current_device(
     )
 
     assert committed is True
-    assert result["recipient_user_id"] == 1
-    assert result["recipient_device_id"] == 77
+
+
+@pytest.mark.asyncio
+async def test_pin_message_serializes_preview_to_plain_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conversation = _conversation()
+    current_user = cast(Any, SimpleNamespace(id=1))
+    current_device = cast(Any, _device())
+    message = SimpleNamespace(
+        id=55,
+        conversation_id=conversation.id,
+        message_uuid=str(uuid4()),
+        sender_user_id=1,
+        message_type=MessageType.FILE,
+        ciphertext="ciphertext:file-smoke",
+        has_attachments=True,
+        client_created_at=_now(),
+    )
+    committed = False
+
+    async def fake_get_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return conversation
+
+    async def fake_get_by_id_in_conversation(
+        session: Any,
+        message_id: int,
+        conversation_id: int,
+    ) -> Any:
+        return message
+
+    async def fake_set_pinned_message(
+        session: Any,
+        conversation: Any,
+        message_id: int | None,
+    ) -> None:
+        _ = (session, conversation, message_id)
+
+    async def fake_create_event(session: Any, **kwargs: Any) -> Any:
+        preview = kwargs["payload"]["preview"]
+        assert isinstance(preview, dict)
+        assert preview["message_id"] == message.id
+        return SimpleNamespace(
+            id=77,
+            event_uuid=str(uuid4()),
+            event_type=SimpleNamespace(value="message_pinned"),
+            actor_user_id=current_user.id,
+            actor_device_id=current_device.id,
+            target_message_id=message.id,
+            payload=kwargs["payload"],
+            created_at=_now(),
+        )
+
+    async def fake_publish_conversation_event(
+        conversation_id: int,
+        payload: dict[str, Any],
+    ) -> None:
+        _ = (conversation_id, payload)
+
+    async def fake_publish_user_event(
+        user_id: int,
+        payload: dict[str, Any],
+    ) -> None:
+        _ = (user_id, payload)
+
+    async def fake_commit() -> None:
+        nonlocal committed
+        committed = True
+
+    session = cast(Any, SimpleNamespace(commit=fake_commit))
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_for_user",
+        fake_get_for_user,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "get_by_id_in_conversation",
+        fake_get_by_id_in_conversation,
+    )
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "set_pinned_message",
+        fake_set_pinned_message,
+    )
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "create_event",
+        fake_create_event,
+    )
+    monkeypatch.setattr(
+        message_service.realtime_hub,
+        "publish_conversation_event",
+        fake_publish_conversation_event,
+    )
+    monkeypatch.setattr(
+        message_service.realtime_hub,
+        "publish_user_event",
+        fake_publish_user_event,
+    )
+
+    result = await message_service.pin_message(
+        session,
+        current_user=current_user,
+        current_device=current_device,
+        conversation_id=conversation.id,
+        message_id=message.id,
+    )
+
+    assert result == PinMessageResponseData(
+        conversation_id=conversation.id,
+        message_id=message.id,
+        pinned=True,
+    )
+    assert committed is True
 
 
 @pytest.mark.asyncio

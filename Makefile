@@ -1,4 +1,4 @@
-.PHONY: up test test-unit test-integration lint format ci
+.PHONY: up test test-unit test-integration lint format ci smoke-local
 
 up:
 	docker compose up --build
@@ -27,3 +27,6 @@ ci:
 format:
 	.venv/bin/black .
 	.venv/bin/isort .
+
+smoke-local:
+	venv/bin/python scripts/mobile_smoke.py
