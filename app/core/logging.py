@@ -57,6 +57,7 @@ def setup_logging() -> None:
     """Configure root and common framework loggers to stdout JSON."""
 
     level = logging.DEBUG if settings.debug else logging.INFO
+    sqlalchemy_level = logging.INFO if settings.debug else logging.WARNING
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
@@ -70,9 +71,10 @@ def setup_logging() -> None:
         "uvicorn",
         "uvicorn.error",
         "uvicorn.access",
-        "sqlalchemy.engine",
         "sqlalchemy.pool",
         "celery",
         "audit",
     ):
         _configure_named_logger(logger_name, handler, level)
+
+    _configure_named_logger("sqlalchemy.engine", handler, sqlalchemy_level)

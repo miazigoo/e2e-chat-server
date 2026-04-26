@@ -140,8 +140,6 @@ services:
     restart: always
     env_file:
       - ../.env
-    environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     volumes:
       - ./secrets/fcm_service_account.json:/run/secrets/fcm_service_account.json:ro
     depends_on:
@@ -157,8 +155,6 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-      otel-collector:
-        condition: service_started
     expose:
       - "8000"
     healthcheck:
@@ -182,8 +178,6 @@ services:
     restart: always
     env_file:
       - ../.env
-    environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     volumes:
       - ./secrets/fcm_service_account.json:/run/secrets/fcm_service_account.json:ro
     command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
@@ -202,8 +196,6 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-      otel-collector:
-        condition: service_started
     logging:
       driver: "json-file"
       options:
@@ -220,8 +212,6 @@ services:
     restart: always
     env_file:
       - ../.env
-    environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=INFO"]
     healthcheck:
       disable: true
@@ -238,8 +228,6 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-      otel-collector:
-        condition: service_started
     logging:
       driver: "json-file"
       options:
@@ -252,6 +240,7 @@ services:
     image: otel/opentelemetry-collector-contrib:0.121.0
     container_name: secure_chat_otel_collector
     restart: always
+    profiles: ["observability"]
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./otel/otel-collector-config.yml:/etc/otelcol-contrib/config.yaml:ro
@@ -269,6 +258,7 @@ services:
     image: jaegertracing/all-in-one:1.65.0
     container_name: secure_chat_jaeger
     restart: always
+    profiles: ["observability"]
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
@@ -284,6 +274,7 @@ services:
     image: prom/prometheus:v3.3.0
     container_name: secure_chat_prometheus
     restart: always
+    profiles: ["observability"]
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -309,6 +300,7 @@ services:
     image: grafana/loki:3.4.1
     container_name: secure_chat_loki
     restart: always
+    profiles: ["observability"]
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./loki/loki-config.yml:/etc/loki/config.yml:ro
@@ -322,6 +314,7 @@ services:
     image: grafana/promtail:3.4.1
     container_name: secure_chat_promtail
     restart: always
+    profiles: ["observability"]
     command: ["-config.file=/etc/promtail/config.yml"]
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/config.yml:ro
@@ -337,6 +330,7 @@ services:
     image: grafana/grafana:11.6.0
     container_name: secure_chat_grafana
     restart: always
+    profiles: ["observability"]
     env_file:
       - ../.env
     environment:
@@ -364,6 +358,7 @@ services:
     image: prom/node-exporter:v1.9.1
     container_name: secure_chat_node_exporter
     restart: always
+    profiles: ["observability"]
     command:
       - --path.rootfs=/host
     volumes:
@@ -377,6 +372,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.2
     container_name: secure_chat_cadvisor
     restart: always
+    profiles: ["observability"]
     privileged: true
     devices:
       - /dev/kmsg

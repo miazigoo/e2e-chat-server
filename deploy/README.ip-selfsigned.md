@@ -50,6 +50,13 @@ This is **not** `google-services.json`.
 docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
 ```
 
+This starts only the core backend stack by default.
+Optional observability services are behind the `observability` profile:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.prod.yml --profile observability up -d --build
+```
+
 ## 5. Export the root CA for Android trust
 
 After the first successful start, copy the root CA from the Caddy container:
