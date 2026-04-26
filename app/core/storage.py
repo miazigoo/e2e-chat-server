@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 from io import BytesIO
 from typing import NoReturn
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 from minio import Minio
@@ -33,6 +34,24 @@ def _raise_storage_unavailable(operation: str, exc: Exception) -> NoReturn:
     ) from exc
 
 
+def _rewrite_presigned_url_for_public_access(url: str) -> str:
+    public_base_url = settings.resolved_minio_public_base_url
+    if not public_base_url:
+        return url
+
+    original = urlsplit(url)
+    public = urlsplit(public_base_url)
+    return urlunsplit(
+        (
+            public.scheme,
+            public.netloc,
+            original.path,
+            original.query,
+            original.fragment,
+        )
+    )
+
+
 async def build_presigned_get_url(
     *,
     bucket_name: str,
@@ -46,7 +65,7 @@ async def build_presigned_get_url(
                 object_name=object_name,
                 expires=timedelta(seconds=settings.presigned_download_expire_seconds),
             )
-            return str(url)
+            return _rewrite_presigned_url_for_public_access(str(url))
         except Exception as exc:
             _raise_storage_unavailable("presigned_get", exc)
 
@@ -66,7 +85,7 @@ async def build_presigned_put_url(
                 object_name=object_name,
                 expires=timedelta(seconds=settings.presigned_upload_expire_seconds),
             )
-            return str(url)
+            return _rewrite_presigned_url_for_public_access(str(url))
         except Exception as exc:
             _raise_storage_unavailable("presigned_put", exc)
 

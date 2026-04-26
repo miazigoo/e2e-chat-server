@@ -8,6 +8,7 @@ services:
     ports:
       - "${CADDY_HTTP_BIND:-80}:80"
       - "${CADDY_HTTPS_BIND:-443}:443"
+      - "${CADDY_STORAGE_HTTPS_BIND:-9443}:9443"
     volumes:
       - ./caddy/${CADDY_CONFIG:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - ./certs:/certs:ro

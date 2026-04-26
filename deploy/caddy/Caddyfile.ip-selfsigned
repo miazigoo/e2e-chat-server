@@ -23,3 +23,26 @@ https://{$SERVER_IP} {
         format json
     }
 }
+
+https://{$SERVER_IP}:9443 {
+    encode gzip zstd
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        Strict-Transport-Security "max-age=31536000"
+    }
+
+    tls internal
+
+    reverse_proxy minio:9000 {
+        header_up Host minio:9000
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}

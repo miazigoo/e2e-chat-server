@@ -1,4 +1,5 @@
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +63,15 @@ class Settings(BaseSettings):
     minio_access_key: str = Field(alias="MINIO_ACCESS_KEY")
     minio_secret_key: str = Field(alias="MINIO_SECRET_KEY")
     minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+    minio_public_endpoint: Optional[str] = Field(
+        default=None,
+        alias="MINIO_PUBLIC_ENDPOINT",
+    )
+    minio_public_secure: bool = Field(default=True, alias="MINIO_PUBLIC_SECURE")
+    minio_public_base_url: Optional[str] = Field(
+        default=None,
+        alias="MINIO_PUBLIC_BASE_URL",
+    )
     minio_bucket_attachments: str = Field(alias="MINIO_BUCKET_ATTACHMENTS")
     minio_bucket_temp: str = Field(alias="MINIO_BUCKET_TEMP")
     minio_bucket_assets: str = Field(alias="MINIO_BUCKET_ASSETS")
@@ -106,6 +116,15 @@ class Settings(BaseSettings):
         if raw == "*":
             return ["*"]
         return [item.strip() for item in raw.split(",") if item.strip()]
+
+    @property
+    def resolved_minio_public_base_url(self) -> str | None:
+        if self.minio_public_base_url:
+            return self.minio_public_base_url.rstrip("/")
+        if self.minio_public_endpoint:
+            scheme = "https" if self.minio_public_secure else "http"
+            return f"{scheme}://{self.minio_public_endpoint.strip().rstrip('/')}"
+        return None
 
     @property
     def email_delivery_enabled(self) -> bool:
@@ -153,6 +172,26 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SMTP_HOST and SMTP_FROM_EMAIL are required when SMTP is configured"
             )
+        if self.minio_public_base_url:
+            parsed = urlsplit(self.minio_public_base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(
+                    "MINIO_PUBLIC_BASE_URL must be an absolute http(s) URL"
+                )
+            if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+                raise ValueError(
+                    "MINIO_PUBLIC_BASE_URL must not contain a path, query, or fragment"
+                )
+        if self.minio_public_endpoint:
+            raw_endpoint = self.minio_public_endpoint.strip()
+            parsed = urlsplit(raw_endpoint)
+            if (
+                parsed.scheme
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("MINIO_PUBLIC_ENDPOINT must contain only host[:port]")
         return self
 
 
