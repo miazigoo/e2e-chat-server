@@ -184,9 +184,10 @@ class Settings(BaseSettings):
                 )
         if self.minio_public_endpoint:
             raw_endpoint = self.minio_public_endpoint.strip()
-            parsed = urlsplit(raw_endpoint)
+            parsed = urlsplit(f"//{raw_endpoint}")
             if (
                 parsed.scheme
+                or not parsed.netloc
                 or parsed.path not in {"", "/"}
                 or parsed.query
                 or parsed.fragment

@@ -24,7 +24,7 @@ class Device(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
 
-    device_uuid: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    device_uuid: Mapped[str] = mapped_column(String(128), nullable=False)
     device_name: Mapped[str] = mapped_column(Text, nullable=False)
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
     app_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -57,6 +57,7 @@ class Device(Base):
     )
 
     __table_args__ = (
+        Index("uq_devices_user_uuid", "user_id", "device_uuid", unique=True),
         Index(
             "ux_devices_one_active_per_user",
             "user_id",
