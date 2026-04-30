@@ -821,6 +821,188 @@ def test_build_reaction_summaries_marks_my_reaction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_messages_around_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages_by_id = {idx: SimpleNamespace(id=idx) for idx in range(10, 15)}
+
+    async def fake_get_participant(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return _participant(conversation_id=conversation_id, user_id=user_id)
+
+    async def fake_get_visible_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+        message_id: int,
+        cleared_at: datetime | None,
+    ) -> Any:
+        _ = (session, conversation_id, user_id, cleared_at)
+        return messages_by_id[message_id]
+
+    async def fake_list_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+        before_id: int | None,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Any]:
+        _ = (session, conversation_id, user_id, cleared_at)
+        assert before_id == 12
+        assert limit == 3
+        return [messages_by_id[11], messages_by_id[10]]
+
+    async def fake_list_after_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+        after_id: int,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Any]:
+        _ = (session, conversation_id, user_id, cleared_at)
+        assert after_id == 12
+        assert limit == 3
+        return [messages_by_id[13], messages_by_id[14]]
+
+    async def fake_build_message_items(
+        session: Any,
+        *,
+        current_user: Any,
+        messages: list[Any],
+    ) -> list[Any]:
+        _ = (session, current_user)
+        return [SimpleNamespace(message_id=message.id) for message in messages]
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_participant",
+        fake_get_participant,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "get_visible_for_user",
+        fake_get_visible_for_user,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "list_for_user",
+        fake_list_for_user,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "list_after_for_user",
+        fake_list_after_for_user,
+    )
+    monkeypatch.setattr(
+        message_service,
+        "_build_message_items",
+        fake_build_message_items,
+    )
+
+    result = await message_service.list_messages(
+        cast(Any, SimpleNamespace()),
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        conversation_id=1,
+        before_id=None,
+        after_id=None,
+        anchor_id=12,
+        limit=5,
+    )
+
+    assert [item.message_id for item in result["items"]] == [10, 11, 12, 13, 14]
+    assert result["before_cursor"] == 10
+    assert result["after_cursor"] == 14
+    assert result["has_more_before"] is False
+    assert result["has_more_after"] is False
+    assert result["anchor_message_id"] == 12
+
+
+@pytest.mark.asyncio
+async def test_list_messages_after_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get_participant(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+    ) -> Any:
+        return _participant(conversation_id=conversation_id, user_id=user_id)
+
+    async def fake_list_after_for_user(
+        session: Any,
+        conversation_id: int,
+        user_id: int,
+        after_id: int,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Any]:
+        _ = (session, conversation_id, user_id, after_id, cleared_at)
+        assert limit == 3
+        return [SimpleNamespace(id=21), SimpleNamespace(id=22), SimpleNamespace(id=23)]
+
+    async def fake_build_message_items(
+        session: Any,
+        *,
+        current_user: Any,
+        messages: list[Any],
+    ) -> list[Any]:
+        _ = (session, current_user)
+        return [SimpleNamespace(message_id=message.id) for message in messages]
+
+    monkeypatch.setattr(
+        message_service.conversations_repo,
+        "get_participant",
+        fake_get_participant,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "list_after_for_user",
+        fake_list_after_for_user,
+    )
+    monkeypatch.setattr(
+        message_service,
+        "_build_message_items",
+        fake_build_message_items,
+    )
+
+    result = await message_service.list_messages(
+        cast(Any, SimpleNamespace()),
+        current_user=cast(Any, SimpleNamespace(id=1)),
+        conversation_id=1,
+        before_id=None,
+        after_id=20,
+        anchor_id=None,
+        limit=2,
+    )
+
+    assert [item.message_id for item in result["items"]] == [21, 22]
+    assert result["before_cursor"] == 21
+    assert result["after_cursor"] == 22
+    assert result["has_more_after"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_messages_rejects_multiple_cursors() -> None:
+    with pytest.raises(BadRequestError) as exc:
+        await message_service.list_messages(
+            cast(Any, SimpleNamespace()),
+            current_user=cast(Any, SimpleNamespace(id=1)),
+            conversation_id=1,
+            before_id=10,
+            after_id=None,
+            anchor_id=11,
+            limit=20,
+        )
+
+    assert exc.value.code == "INVALID_MESSAGE_CURSOR"
+
+
+@pytest.mark.asyncio
 async def test_search_messages_blank_query_returns_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

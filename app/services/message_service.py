@@ -666,8 +666,19 @@ async def list_messages(
     current_user: User,
     conversation_id: int,
     before_id: int | None,
+    after_id: int | None,
+    anchor_id: int | None,
     limit: int,
 ) -> dict:
+    cursor_count = sum(
+        cursor is not None for cursor in (before_id, after_id, anchor_id)
+    )
+    if cursor_count > 1:
+        raise BadRequestError(
+            code="INVALID_MESSAGE_CURSOR",
+            message="Use only one of before_id, after_id or anchor_id",
+        )
+
     participant = await conversations_repo.get_participant(
         session,
         conversation_id=conversation_id,
@@ -679,22 +690,108 @@ async def list_messages(
             message="Conversation not found",
         )
 
+    if anchor_id is not None:
+        anchor_message = await messages_repo.get_visible_for_user(
+            session,
+            conversation_id=conversation_id,
+            user_id=current_user.id,
+            message_id=anchor_id,
+            cleared_at=participant.cleared_at,
+        )
+        if anchor_message is None:
+            raise NotFoundError(
+                code="MESSAGE_NOT_FOUND",
+                message="Message not found",
+            )
+
+        before_limit = limit // 2
+        after_limit = limit - before_limit - 1
+        before_messages = await messages_repo.list_for_user(
+            session,
+            conversation_id=conversation_id,
+            user_id=current_user.id,
+            before_id=anchor_id,
+            limit=before_limit + 1,
+            cleared_at=participant.cleared_at,
+        )
+        after_messages = await messages_repo.list_after_for_user(
+            session,
+            conversation_id=conversation_id,
+            user_id=current_user.id,
+            after_id=anchor_id,
+            limit=after_limit + 1,
+            cleared_at=participant.cleared_at,
+        )
+
+        has_more_before = len(before_messages) > before_limit
+        has_more_after = len(after_messages) > after_limit
+        ordered_messages = (
+            list(reversed(before_messages[:before_limit]))
+            + [anchor_message]
+            + after_messages[:after_limit]
+        )
+        items = await _build_message_items(
+            session,
+            current_user=current_user,
+            messages=ordered_messages,
+        )
+        return {
+            "items": items,
+            "before_cursor": items[0].message_id if items else None,
+            "after_cursor": items[-1].message_id if items else None,
+            "has_more_before": has_more_before,
+            "has_more_after": has_more_after,
+            "anchor_message_id": anchor_id,
+        }
+
+    if after_id is not None:
+        messages = await messages_repo.list_after_for_user(
+            session,
+            conversation_id=conversation_id,
+            user_id=current_user.id,
+            after_id=after_id,
+            limit=limit + 1,
+            cleared_at=participant.cleared_at,
+        )
+        has_more_after = len(messages) > limit
+        ordered_messages = messages[:limit]
+        items = await _build_message_items(
+            session,
+            current_user=current_user,
+            messages=ordered_messages,
+        )
+        return {
+            "items": items,
+            "before_cursor": items[0].message_id if items else None,
+            "after_cursor": items[-1].message_id if items else None,
+            "has_more_before": bool(items),
+            "has_more_after": has_more_after,
+            "anchor_message_id": None,
+        }
+
     messages = await messages_repo.list_for_user(
         session,
         conversation_id=conversation_id,
         user_id=current_user.id,
         before_id=before_id,
-        limit=limit,
+        limit=limit + 1,
         cleared_at=participant.cleared_at,
     )
 
-    ordered_messages = list(reversed(messages))
+    has_more_before = len(messages) > limit
+    ordered_messages = list(reversed(messages[:limit]))
+    items = await _build_message_items(
+        session,
+        current_user=current_user,
+        messages=ordered_messages,
+    )
     return {
-        "items": await _build_message_items(
-            session,
-            current_user=current_user,
-            messages=ordered_messages,
-        )
+        "items": items,
+        "before_cursor": items[0].message_id if items else None,
+        "after_cursor": items[-1].message_id if items else None,
+        "has_more_before": has_more_before,
+        "has_more_after": False,
+        "anchor_message_id": None,
     }
 
 

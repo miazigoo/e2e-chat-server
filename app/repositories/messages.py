@@ -118,6 +118,67 @@ class MessagesRepository:
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_after_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        after_id: int,
+        limit: int,
+        cleared_at: datetime | None,
+    ) -> list[Message]:
+        if limit <= 0:
+            return []
+
+        hidden_subquery = select(MessageVisibilityOverride.message_id).where(
+            MessageVisibilityOverride.user_id == user_id
+        )
+
+        stmt = (
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.id > after_id,
+                Message.is_deleted_global.is_(False),
+                ~Message.id.in_(hidden_subquery),
+            )
+            .order_by(Message.id.asc())
+            .limit(limit)
+        )
+
+        if cleared_at is not None:
+            stmt = stmt.where(Message.created_at > cleared_at)
+
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_visible_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+        user_id: int,
+        message_id: int,
+        cleared_at: datetime | None,
+    ) -> Message | None:
+        hidden_subquery = select(MessageVisibilityOverride.message_id).where(
+            MessageVisibilityOverride.user_id == user_id
+        )
+
+        stmt = select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.id == message_id,
+            Message.is_deleted_global.is_(False),
+            ~Message.id.in_(hidden_subquery),
+        )
+
+        if cleared_at is not None:
+            stmt = stmt.where(Message.created_at > cleared_at)
+
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_message_for_recipient(
         self,
         session: AsyncSession,

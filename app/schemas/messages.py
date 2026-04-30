@@ -173,6 +173,11 @@ class ListMessagesResponseData(BaseModel):
     """Paginated message history response."""
 
     items: list[MessageListItemSchema] = Field(default_factory=list)
+    before_cursor: int | None = None
+    after_cursor: int | None = None
+    has_more_before: bool = False
+    has_more_after: bool = False
+    anchor_message_id: int | None = None
 
 
 class SearchMessagesResponseData(BaseModel):

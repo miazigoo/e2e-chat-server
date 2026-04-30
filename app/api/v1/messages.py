@@ -56,16 +56,20 @@ router = APIRouter()
 async def list_messages_endpoint(
     conversation_id: int,
     before_id: int | None = Query(default=None, ge=1),
+    after_id: int | None = Query(default=None, ge=1),
+    anchor_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ListMessagesResponseData]:
-    """List messages for one conversation with optional backward pagination."""
+    """List messages for one conversation with cursor or anchor pagination."""
     result = await list_messages(
         session,
         current_user=current_user,
         conversation_id=conversation_id,
         before_id=before_id,
+        after_id=after_id,
+        anchor_id=anchor_id,
         limit=limit,
     )
     return ApiResponse(data=ListMessagesResponseData(**result))

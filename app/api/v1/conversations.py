@@ -90,6 +90,8 @@ async def get_conversation_endpoint(
 async def list_conversation_messages_endpoint(
     conversation_id: int,
     before_id: int | None = Query(default=None, ge=1),
+    after_id: int | None = Query(default=None, ge=1),
+    anchor_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
@@ -99,6 +101,8 @@ async def list_conversation_messages_endpoint(
         current_user=current_user,
         conversation_id=conversation_id,
         before_id=before_id,
+        after_id=after_id,
+        anchor_id=anchor_id,
         limit=limit,
     )
     return ApiResponse(data=ListMessagesResponseData(**data))
