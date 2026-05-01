@@ -27,6 +27,7 @@ class SendMessageRequest(BaseModel):
     auto_delete_after_read_seconds: int | None = Field(default=None, gt=0)
 
     attachment_ids: list[int] = Field(default_factory=list, max_length=20)
+    attachment_tag_ids: list[int] = Field(default_factory=list, max_length=20)
     device_payloads: list["MessageDevicePayloadRequest"] = Field(
         default_factory=list,
         max_length=100,
@@ -45,6 +46,13 @@ class SendMessageRequest(BaseModel):
     def validate_attachment_ids_unique(cls, value: list[int]) -> list[int]:
         if len(value) != len(set(value)):
             raise ValueError("attachment_ids must be unique")
+        return value
+
+    @field_validator("attachment_tag_ids")
+    @classmethod
+    def validate_attachment_tag_ids_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("attachment_tag_ids must be unique")
         return value
 
     @field_validator("device_payloads")

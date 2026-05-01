@@ -21,6 +21,7 @@ from app.models.user import User
 from app.repositories.conversations import ConversationsRepository
 from app.repositories.devices import DevicesRepository
 from app.repositories.files import FilesRepository
+from app.repositories.media_tags import MediaTagsRepository
 from app.repositories.messages import MessagesRepository
 from app.schemas.messages import (
     DeleteMessagesRequest,
@@ -43,6 +44,7 @@ conversations_repo = ConversationsRepository()
 messages_repo = MessagesRepository()
 devices_repo = DevicesRepository()
 files_repo = FilesRepository()
+media_tags_repo = MediaTagsRepository()
 
 
 def _now() -> datetime:
@@ -170,6 +172,11 @@ def _validate_client_message_payload(payload: SendMessageRequest) -> None:
         raise BadRequestError(
             code="FILE_MESSAGE_REQUIRES_ATTACHMENTS",
             message="File messages must include attachment_ids",
+        )
+    if payload.attachment_tag_ids and not payload.attachment_ids:
+        raise BadRequestError(
+            code="ATTACHMENT_TAGS_REQUIRE_ATTACHMENTS",
+            message="attachment_tag_ids require attachment_ids",
         )
 
 
@@ -724,11 +731,29 @@ async def send_message(
             )
 
     if attachments:
+        if payload.attachment_tag_ids:
+            tags = await media_tags_repo.list_by_ids_for_conversation(
+                session,
+                conversation_id=conversation.id,
+                tag_ids=payload.attachment_tag_ids,
+            )
+            if len(tags) != len(set(payload.attachment_tag_ids)):
+                raise BadRequestError(
+                    code="INVALID_MEDIA_TAGS",
+                    message="One or more media tags are invalid for this conversation",
+                )
         await files_repo.link_attachments_to_message(
             session,
             attachments=attachments,
             message_id=message.id,
         )
+        if payload.attachment_tag_ids:
+            await media_tags_repo.add_tags_to_attachments(
+                session,
+                attachment_ids=[attachment.id for attachment in attachments],
+                tag_ids=payload.attachment_tag_ids,
+                tagged_by_user_id=current_user.id,
+            )
 
     event = await conversations_repo.create_event(
         session,
@@ -1013,6 +1038,7 @@ async def list_shared_messages(
     conversation_id: int,
     tab: str,
     before_message_id: int | None,
+    tag_id: int | None,
     limit: int,
 ) -> SharedMessagesResponseData:
     participant = await conversations_repo.get_participant(
@@ -1033,12 +1059,25 @@ async def list_shared_messages(
             message="tab must be one of: media, links, files",
         )
 
+    if tag_id is not None:
+        tag = await media_tags_repo.get_for_conversation(
+            session,
+            conversation_id=conversation_id,
+            tag_id=tag_id,
+        )
+        if tag is None:
+            raise NotFoundError(
+                code="MEDIA_TAG_NOT_FOUND",
+                message="Media tag not found",
+            )
+
     messages = await messages_repo.list_shared_messages_for_user(
         session,
         conversation_id=conversation_id,
         user_id=current_user.id,
         tab=normalized_tab,
         before_message_id=before_message_id,
+        tag_id=tag_id,
         limit=limit,
         cleared_at=participant.cleared_at,
     )

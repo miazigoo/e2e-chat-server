@@ -1,5 +1,10 @@
 from app.models.app_release import AppRelease
-from app.models.attachment import Attachment, UploadSession
+from app.models.attachment import (
+    Attachment,
+    AttachmentMediaTag,
+    ConversationMediaTag,
+    UploadSession,
+)
 from app.models.auth_email_code import AuthEmailCode
 from app.models.auth_session import AuthSession
 from app.models.base import Base
@@ -25,6 +30,8 @@ __all__ = [
     "Base",
     "AppRelease",
     "Attachment",
+    "AttachmentMediaTag",
+    "ConversationMediaTag",
     "UploadSession",
     "AuthEmailCode",
     "AuthSession",

@@ -6,16 +6,23 @@ from app.core.storage import build_presigned_get_url
 from app.models.attachment import Attachment
 from app.models.user import User
 from app.repositories.files import FilesRepository
+from app.repositories.media_tags import MediaTagsRepository
 from app.schemas.files import (
     AttachmentMetadataItemSchema,
     GetAttachmentResponseData,
     ListMessageAttachmentsResponseData,
 )
+from app.schemas.media_tags import MediaTagSchema
 
 files_repo = FilesRepository()
+media_tags_repo = MediaTagsRepository()
 
 
-def _attachment_to_schema(attachment: Attachment) -> AttachmentMetadataItemSchema:
+def _attachment_to_schema(
+    attachment: Attachment,
+    *,
+    media_tags: list[MediaTagSchema] | None = None,
+) -> AttachmentMetadataItemSchema:
     return AttachmentMetadataItemSchema(
         attachment_id=attachment.id,
         attachment_uuid=attachment.attachment_uuid,
@@ -35,6 +42,7 @@ def _attachment_to_schema(attachment: Attachment) -> AttachmentMetadataItemSchem
         created_at=attachment.created_at,
         expires_at=attachment.expires_at,
         deleted_at=attachment.deleted_at,
+        media_tags=media_tags or [],
     )
 
 
@@ -49,10 +57,31 @@ async def list_message_attachments(
         message_id=message_id,
         user_id=current_user.id,
     )
+    tags_by_attachment_id = await media_tags_repo.list_tags_for_attachments(
+        session,
+        attachment_ids=[attachment.id for attachment in attachments],
+    )
 
     return ListMessageAttachmentsResponseData(
         message_id=message_id,
-        items=[_attachment_to_schema(att) for att in attachments],
+        items=[
+            _attachment_to_schema(
+                att,
+                media_tags=[
+                    MediaTagSchema(
+                        tag_id=tag.id,
+                        conversation_id=tag.conversation_id,
+                        name=tag.name,
+                        color=tag.color,
+                        created_by_user_id=tag.created_by_user_id,
+                        created_at=tag.created_at,
+                        updated_at=tag.updated_at,
+                    )
+                    for tag in tags_by_attachment_id.get(att.id, [])
+                ],
+            )
+            for att in attachments
+        ],
     )
 
 
@@ -83,9 +112,25 @@ async def get_attachment_metadata(
             bucket_name=attachment.bucket_name,
             object_name=attachment.storage_key,
         )
+    tags_by_attachment_id = await media_tags_repo.list_tags_for_attachments(
+        session,
+        attachment_ids=[attachment.id],
+    )
+    media_tags = [
+        MediaTagSchema(
+            tag_id=tag.id,
+            conversation_id=tag.conversation_id,
+            name=tag.name,
+            color=tag.color,
+            created_by_user_id=tag.created_by_user_id,
+            created_at=tag.created_at,
+            updated_at=tag.updated_at,
+        )
+        for tag in tags_by_attachment_id.get(attachment.id, [])
+    ]
 
     return GetAttachmentResponseData(
-        **_attachment_to_schema(attachment).model_dump(),
+        **_attachment_to_schema(attachment, media_tags=media_tags).model_dump(),
         can_download=can_download,
         download_url=download_url,
         download_url_expires_in=expires_in,

@@ -20,6 +20,10 @@ from app.schemas.files import (
     InitAttachmentsResponseData,
     ListMessageAttachmentsResponseData,
 )
+from app.schemas.media_tags import (
+    AssignAttachmentTagsRequest,
+    AttachmentTagsResponseData,
+)
 from app.services.app_release_service import (
     check_android_apk_update,
     get_latest_android_apk_release,
@@ -33,6 +37,10 @@ from app.services.file_service import (
     complete_upload_session,
     create_upload_session,
     init_attachments,
+)
+from app.services.media_tag_service import (
+    assign_tags_to_attachments,
+    remove_tag_from_attachment,
 )
 
 router = APIRouter()
@@ -150,6 +158,46 @@ async def get_attachment_metadata_endpoint(
         session,
         current_user=current_user,
         attachment_id=attachment_id,
+    )
+    return ApiResponse(data=data)
+
+
+@router.post(
+    "/attachments/{attachment_id}/media-tags",
+    response_model=ApiResponse[AttachmentTagsResponseData],
+    summary="Assign media tags to attachment",
+)
+async def assign_attachment_media_tags_endpoint(
+    attachment_id: int,
+    payload: AssignAttachmentTagsRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[AttachmentTagsResponseData]:
+    data = await assign_tags_to_attachments(
+        session,
+        current_user=current_user,
+        attachment_id=attachment_id,
+        payload=payload,
+    )
+    return ApiResponse(data=data)
+
+
+@router.delete(
+    "/attachments/{attachment_id}/media-tags/{tag_id}",
+    response_model=ApiResponse[AttachmentTagsResponseData],
+    summary="Remove media tag from attachment",
+)
+async def remove_attachment_media_tag_endpoint(
+    attachment_id: int,
+    tag_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[AttachmentTagsResponseData]:
+    data = await remove_tag_from_attachment(
+        session,
+        current_user=current_user,
+        attachment_id=attachment_id,
+        tag_id=tag_id,
     )
     return ApiResponse(data=data)
 

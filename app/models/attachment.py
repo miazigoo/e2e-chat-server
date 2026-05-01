@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Index, Integer, Text, func, text
+from sqlalchemy import ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -128,4 +128,73 @@ class Attachment(Base):
         Index("ix_attachments_message_id", "message_id"),
         Index("ix_attachments_upload_session_id", "upload_session_id"),
         Index("ix_attachments_expires_at", "expires_at"),
+    )
+
+
+class ConversationMediaTag(Base):
+    __tablename__ = "conversation_media_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_name: Mapped[str] = mapped_column(Text, nullable=False)
+    color: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "normalized_name",
+            name="uq_conversation_media_tags_name",
+        ),
+        Index("ix_conversation_media_tags_conversation", "conversation_id"),
+    )
+
+
+class AttachmentMediaTag(Base):
+    __tablename__ = "attachment_media_tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(
+        ForeignKey("attachments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("conversation_media_tags.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tagged_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "attachment_id",
+            "tag_id",
+            name="uq_attachment_media_tags_attachment_tag",
+        ),
+        Index("ix_attachment_media_tags_tag", "tag_id"),
+        Index("ix_attachment_media_tags_attachment", "attachment_id"),
     )

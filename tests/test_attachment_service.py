@@ -63,6 +63,18 @@ async def test_get_attachment_metadata_returns_presigned_url(
         fake_build_presigned_get_url,
     )
 
+    async def fake_list_tags_for_attachments(
+        session: Any,
+        attachment_ids: list[int],
+    ) -> dict[int, list[Any]]:
+        return {}
+
+    monkeypatch.setattr(
+        attachment_service.media_tags_repo,
+        "list_tags_for_attachments",
+        fake_list_tags_for_attachments,
+    )
+
     result = await attachment_service.get_attachment_metadata(
         cast(Any, SimpleNamespace()),
         current_user=cast(Any, SimpleNamespace(id=1)),

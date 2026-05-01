@@ -7,9 +7,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError
+from app.models.attachment import Attachment, AttachmentMediaTag, UploadSession
+from app.models.chat_enums import AttachmentStatus, UploadSessionStatus
 from app.models.message import MessageDevicePayload, MessageRecipientState
+from app.schemas.media_tags import CreateMediaTagRequest
 from app.schemas.messages import DeleteMessagesRequest, SendMessageRequest
-from app.services.message_service import delete_global, send_message
+from app.services.media_tag_service import create_media_tag
+from app.services.message_service import (
+    delete_global,
+    list_shared_messages,
+    send_message,
+)
 from tests.integration.helpers import (
     create_conversation,
     create_device,
@@ -230,3 +238,97 @@ async def test_send_message_fans_out_to_all_active_recipient_devices(
     assert revoked_recipient_device.id not in {
         state.recipient_device_id for state in states
     }
+
+
+async def test_send_file_message_assigns_media_tags_and_filters_shared(
+    session: AsyncSession,
+) -> None:
+    sender = await create_user(session, nickname="@sender-tags")
+    recipient = await create_user(session, nickname="@recipient-tags")
+    sender_device = await create_device(
+        session, user_id=sender.id, device_uuid="sender-tags-device"
+    )
+    await create_device(
+        session, user_id=recipient.id, device_uuid="recipient-tags-device"
+    )
+    conversation = await create_conversation(
+        session,
+        user_a_id=sender.id,
+        user_b_id=recipient.id,
+        created_by_user_id=sender.id,
+        message_ttl_days=30,
+    )
+    upload_session = UploadSession(
+        user_id=sender.id,
+        conversation_id=conversation.id,
+        status=UploadSessionStatus.COMPLETED,
+        files_expected_count=1,
+        files_uploaded_count=1,
+        expires_at=now_utc() + timedelta(hours=1),
+        completed_at=now_utc(),
+    )
+    session.add(upload_session)
+    await session.flush()
+    attachment = Attachment(
+        upload_session_id=upload_session.id,
+        storage_key="attachments/tagged-check",
+        bucket_name="attachments",
+        encrypted_file_name="check.enc",
+        encrypted_metadata={"kind": "check"},
+        file_size=123,
+        mime_hint="image/png",
+        sha256_encrypted_blob="a" * 64,
+        upload_status=AttachmentStatus.UPLOADED,
+        expires_at=now_utc() + timedelta(days=1),
+    )
+    session.add(attachment)
+    await session.commit()
+
+    tag = await create_media_tag(
+        session,
+        current_user=sender,
+        conversation_id=conversation.id,
+        payload=CreateMediaTagRequest(name="Чеки", color="#00AA55"),
+    )
+
+    sent = await send_message(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        payload=SendMessageRequest(
+            conversation_id=conversation.id,
+            recipient_user_id=recipient.id,
+            message_uuid=str(uuid4()),
+            message_type="file",
+            ciphertext="file-cipher",
+            ciphertext_version=1,
+            encryption_mode="signal",
+            nonce="file-nonce",
+            client_created_at=now_utc(),
+            expires_at=now_utc() + timedelta(days=1),
+            attachment_ids=[attachment.id],
+            attachment_tag_ids=[tag.tag_id],
+        ),
+    )
+
+    link = (
+        await session.execute(
+            select(AttachmentMediaTag).where(
+                AttachmentMediaTag.attachment_id == attachment.id,
+                AttachmentMediaTag.tag_id == tag.tag_id,
+            )
+        )
+    ).scalar_one_or_none()
+    assert link is not None
+
+    shared = await list_shared_messages(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        conversation_id=conversation.id,
+        tab="media",
+        before_message_id=None,
+        tag_id=tag.tag_id,
+        limit=20,
+    )
+    assert [item.message_id for item in shared.items] == [sent["message_id"]]

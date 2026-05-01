@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Text, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.attachment import Attachment
+from app.models.attachment import Attachment, AttachmentMediaTag
 from app.models.chat_enums import (
     DeliveryStatus,
     EncryptionMode,
@@ -531,6 +531,7 @@ class MessagesRepository:
         user_id: int,
         tab: str,
         before_message_id: int | None,
+        tag_id: int | None,
         limit: int,
         cleared_at: datetime | None,
     ) -> list[Message]:
@@ -557,6 +558,12 @@ class MessagesRepository:
 
         if cleared_at is not None:
             stmt = stmt.where(Message.created_at > cleared_at)
+
+        if tag_id is not None:
+            stmt = stmt.join(
+                AttachmentMediaTag,
+                AttachmentMediaTag.attachment_id == Attachment.id,
+            ).where(AttachmentMediaTag.tag_id == tag_id)
 
         if tab == "media":
             stmt = stmt.where(

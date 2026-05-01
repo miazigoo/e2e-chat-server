@@ -22,6 +22,12 @@ from app.schemas.conversations import (
     UpdateConversationResponseData,
     UpdateConversationSettingsRequest,
 )
+from app.schemas.media_tags import (
+    CreateMediaTagRequest,
+    ListMediaTagsResponseData,
+    MediaTagSchema,
+    UpdateMediaTagRequest,
+)
 from app.schemas.messages import ListMessagesResponseData
 from app.services.conversation_service import (
     clear_global,
@@ -34,9 +40,95 @@ from app.services.conversation_service import (
     update_conversation,
     update_conversation_settings,
 )
+from app.services.media_tag_service import (
+    create_media_tag,
+    delete_media_tag,
+    list_media_tags,
+    update_media_tag,
+)
 from app.services.message_service import list_messages
 
 router = APIRouter()
+
+
+@router.get(
+    "/{conversation_id}/media-tags",
+    response_model=ApiResponse[ListMediaTagsResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def list_media_tags_endpoint(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[ListMediaTagsResponseData]:
+    data = await list_media_tags(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+    )
+    return ApiResponse(data=data)
+
+
+@router.post(
+    "/{conversation_id}/media-tags",
+    response_model=ApiResponse[MediaTagSchema],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def create_media_tag_endpoint(
+    conversation_id: int,
+    payload: CreateMediaTagRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[MediaTagSchema]:
+    data = await create_media_tag(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        payload=payload,
+    )
+    return ApiResponse(data=data)
+
+
+@router.patch(
+    "/{conversation_id}/media-tags/{tag_id}",
+    response_model=ApiResponse[MediaTagSchema],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def update_media_tag_endpoint(
+    conversation_id: int,
+    tag_id: int,
+    payload: UpdateMediaTagRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[MediaTagSchema]:
+    data = await update_media_tag(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        tag_id=tag_id,
+        payload=payload,
+    )
+    return ApiResponse(data=data)
+
+
+@router.delete(
+    "/{conversation_id}/media-tags/{tag_id}",
+    response_model=ApiResponse[dict],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def delete_media_tag_endpoint(
+    conversation_id: int,
+    tag_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[dict]:
+    data = await delete_media_tag(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        tag_id=tag_id,
+    )
+    return ApiResponse(data=data)
 
 
 @router.post(

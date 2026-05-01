@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.media_tags import MediaTagSchema
+
 
 class CreateUploadSessionRequest(BaseModel):
     conversation_id: int
@@ -76,6 +78,7 @@ class AttachmentMetadataItemSchema(BaseModel):
     created_at: datetime
     expires_at: datetime | None = None
     deleted_at: datetime | None = None
+    media_tags: list[MediaTagSchema] = Field(default_factory=list)
 
 
 class ListMessageAttachmentsResponseData(BaseModel):

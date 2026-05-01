@@ -297,6 +297,7 @@ async def list_shared_messages_endpoint(
     conversation_id: int,
     tab: str = Query(..., pattern="^(media|links|files)$"),
     before_message_id: int | None = Query(default=None, ge=1),
+    tag_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     current_device: Device = Depends(get_current_device),
@@ -310,6 +311,7 @@ async def list_shared_messages_endpoint(
         conversation_id=conversation_id,
         tab=tab,
         before_message_id=before_message_id,
+        tag_id=tag_id,
         limit=limit,
     )
     return ApiResponse(data=data)
