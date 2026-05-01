@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.attachment import Attachment, UploadSession
@@ -238,6 +238,30 @@ class FilesRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_conversation_id(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: int,
+    ) -> list[Attachment]:
+        from app.models.message import Message
+
+        result = await session.execute(
+            select(Attachment)
+            .outerjoin(Message, Message.id == Attachment.message_id)
+            .outerjoin(
+                UploadSession,
+                UploadSession.id == Attachment.upload_session_id,
+            )
+            .where(
+                or_(
+                    Message.conversation_id == conversation_id,
+                    UploadSession.conversation_id == conversation_id,
+                )
+            )
+        )
+        return list(result.scalars().unique().all())
+
     async def list_by_message_id(
         self,
         session: AsyncSession,
@@ -251,6 +275,20 @@ class FilesRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def delete_attachments(
+        self,
+        session: AsyncSession,
+        *,
+        attachment_ids: list[int],
+    ) -> None:
+        if not attachment_ids:
+            return
+
+        await session.execute(
+            delete(Attachment).where(Attachment.id.in_(attachment_ids))
+        )
+        await session.flush()
 
     async def clone_attachment(
         self,

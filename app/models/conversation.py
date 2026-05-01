@@ -121,6 +121,14 @@ class ConversationParticipant(Base):
     cleared_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    pinned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     shared_secret_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -137,6 +145,12 @@ class ConversationParticipant(Base):
             "ix_conversation_participants_user_conversation",
             "user_id",
             "conversation_id",
+        ),
+        Index(
+            "ix_conversation_participants_user_pinned",
+            "user_id",
+            "is_pinned",
+            "pinned_at",
         ),
     )
 

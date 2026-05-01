@@ -64,6 +64,7 @@ class GetConversationResponseData(BaseModel):
     peer_shared_secret_enabled: bool = False
     is_active: bool
     is_purged: bool
+    is_pinned: bool = False
     pinned_message: MessagePreviewSchema | None = None
 
 
@@ -86,6 +87,18 @@ class ClearConversationResponseData(BaseModel):
     cleared: bool
     cleared_at: str | None = None
     deleted_messages_count: int | None = None
+    deleted_attachment_ids: list[int] = Field(default_factory=list)
+
+
+class PinConversationResponseData(BaseModel):
+    conversation_id: int
+    is_pinned: bool
+
+
+class DeleteConversationResponseData(BaseModel):
+    conversation_id: int
+    deleted: bool
+    deleted_messages_count: int = 0
     deleted_attachment_ids: list[int] = Field(default_factory=list)
 
 
@@ -120,6 +133,7 @@ class ConversationListItemSchema(BaseModel):
     peer_shared_secret_enabled: bool = False
     is_active: bool
     is_purged: bool
+    is_pinned: bool = False
     updated_at: datetime
     peer: ConversationPeerSchema
     unread_count: int = 0

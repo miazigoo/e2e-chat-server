@@ -14,8 +14,10 @@ from app.schemas.conversations import (
     ConversationSettingsResponseData,
     CreateConversationRequest,
     CreateConversationResponseData,
+    DeleteConversationResponseData,
     GetConversationResponseData,
     ListConversationsResponseData,
+    PinConversationResponseData,
     UpdateConversationRequest,
     UpdateConversationResponseData,
     UpdateConversationSettingsRequest,
@@ -25,8 +27,10 @@ from app.services.conversation_service import (
     clear_global,
     clear_local,
     create_conversation,
+    delete_conversation,
     get_conversation,
     list_conversations,
+    pin_conversation,
     update_conversation,
     update_conversation_settings,
 )
@@ -153,6 +157,44 @@ async def update_conversation_settings_endpoint(
 
 
 @router.post(
+    "/{conversation_id}/pin",
+    response_model=ApiResponse[PinConversationResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def pin_conversation_endpoint(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[PinConversationResponseData]:
+    data = await pin_conversation(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        is_pinned=True,
+    )
+    return ApiResponse(data=data)
+
+
+@router.delete(
+    "/{conversation_id}/pin",
+    response_model=ApiResponse[PinConversationResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def unpin_conversation_endpoint(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[PinConversationResponseData]:
+    data = await pin_conversation(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+        is_pinned=False,
+    )
+    return ApiResponse(data=data)
+
+
+@router.post(
     "/{conversation_id}/clear-local",
     response_model=ApiResponse[ClearConversationResponseData],
     responses=COMMON_ERROR_RESPONSES,
@@ -188,3 +230,21 @@ async def clear_global_endpoint(
         payload=payload,
     )
     return ApiResponse(data=ClearConversationResponseData(**data))
+
+
+@router.delete(
+    "/{conversation_id}",
+    response_model=ApiResponse[DeleteConversationResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def delete_conversation_endpoint(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[DeleteConversationResponseData]:
+    data = await delete_conversation(
+        session,
+        current_user=current_user,
+        conversation_id=conversation_id,
+    )
+    return ApiResponse(data=data)

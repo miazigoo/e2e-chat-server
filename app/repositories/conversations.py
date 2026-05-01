@@ -110,13 +110,17 @@ class ConversationsRepository:
     ) -> list[Conversation]:
         result = await session.execute(
             select(Conversation)
-            .where(
-                or_(
-                    Conversation.user_a_id == user_id,
-                    Conversation.user_b_id == user_id,
-                )
+            .join(
+                ConversationParticipant,
+                ConversationParticipant.conversation_id == Conversation.id,
             )
-            .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+            .where(ConversationParticipant.user_id == user_id)
+            .order_by(
+                ConversationParticipant.is_pinned.desc(),
+                ConversationParticipant.pinned_at.desc().nullslast(),
+                Conversation.updated_at.desc(),
+                Conversation.id.desc(),
+            )
         )
         return list(result.scalars().all())
 
@@ -347,6 +351,19 @@ class ConversationsRepository:
         await session.flush()
         return participant
 
+    async def update_participant_pin_state(
+        self,
+        session: AsyncSession,
+        *,
+        participant: ConversationParticipant,
+        is_pinned: bool,
+        pinned_at: datetime | None,
+    ) -> ConversationParticipant:
+        participant.is_pinned = is_pinned
+        participant.pinned_at = pinned_at
+        await session.flush()
+        return participant
+
     async def create_event(
         self,
         session: AsyncSession,
@@ -390,3 +407,12 @@ class ConversationsRepository:
         conversation.pinned_message_id = message_id
         await session.flush()
         return conversation
+
+    async def delete_conversation(
+        self,
+        session: AsyncSession,
+        *,
+        conversation: Conversation,
+    ) -> None:
+        await session.delete(conversation)
+        await session.flush()

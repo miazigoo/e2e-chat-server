@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,9 @@ from app.schemas.conversations import (
     ConversationListItemSchema,
     ConversationPeerSchema,
     CreateConversationRequest,
+    DeleteConversationResponseData,
     ListConversationsResponseData,
+    PinConversationResponseData,
     UpdateConversationRequest,
     UpdateConversationSettingsRequest,
 )
@@ -285,6 +288,7 @@ async def list_conversations(
                 ),
                 is_active=conversation.is_active,
                 is_purged=conversation.is_purged,
+                is_pinned=(participant.is_pinned if participant is not None else False),
                 updated_at=conversation.updated_at,
                 peer=ConversationPeerSchema(
                     user_id=row["peer_user_id"],
@@ -367,6 +371,7 @@ async def get_conversation(
         ),
         "is_active": conversation.is_active,
         "is_purged": conversation.is_purged,
+        "is_pinned": participant.is_pinned if participant is not None else False,
         "pinned_message": (
             _preview_from_message(pinned_message)
             if pinned_message is not None
@@ -714,3 +719,163 @@ async def clear_global(
         "deleted_messages_count": deleted_count,
         "deleted_attachment_ids": deleted_attachment_ids,
     }
+
+
+async def pin_conversation(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    conversation_id: int,
+    is_pinned: bool,
+) -> PinConversationResponseData:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if not conversation:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    participant = await conversations_repo.get_participant(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if participant is None:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    pinned_at = _now() if is_pinned else None
+    await conversations_repo.update_participant_pin_state(
+        session,
+        participant=participant,
+        is_pinned=is_pinned,
+        pinned_at=pinned_at,
+    )
+    await session.commit()
+
+    event_type = (
+        EventType.CONVERSATION_PINNED if is_pinned else EventType.CONVERSATION_UNPINNED
+    )
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=event_type.value,
+        event_id=0,
+        event_uuid=str(uuid4()),
+        actor_user_id=current_user.id,
+        actor_device_id=None,
+        target_message_id=None,
+        payload={"is_pinned": is_pinned},
+        created_at=pinned_at or _now(),
+    )
+    await realtime_hub.publish_user_event(current_user.id, realtime_payload)
+
+    return PinConversationResponseData(
+        conversation_id=conversation_id,
+        is_pinned=is_pinned,
+    )
+
+
+async def delete_conversation(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    conversation_id: int,
+) -> DeleteConversationResponseData:
+    conversation = await conversations_repo.get_for_user(
+        session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+    )
+    if not conversation:
+        raise NotFoundError(
+            code="CONVERSATION_NOT_FOUND",
+            message="Conversation not found",
+        )
+
+    if conversation.is_saved_messages:
+        raise BadRequestError(
+            code="SAVED_MESSAGES_DELETE_NOT_ALLOWED",
+            message="Saved messages chat cannot be deleted",
+        )
+
+    _ensure_conversation_mutable(
+        is_purged=conversation.is_purged,
+        is_active=conversation.is_active,
+    )
+
+    message_ids_result = await session.execute(
+        select(Message.id).where(Message.conversation_id == conversation_id)
+    )
+    message_ids = list(message_ids_result.scalars().all())
+    attachments = await files_repo.list_by_conversation_id(
+        session,
+        conversation_id=conversation_id,
+    )
+    deleted_attachment_ids = sorted({attachment.id for attachment in attachments})
+    deleted_messages_count = len(message_ids)
+
+    if deleted_attachment_ids:
+        await files_repo.delete_attachments(
+            session,
+            attachment_ids=deleted_attachment_ids,
+        )
+    await conversations_repo.delete_conversation(
+        session,
+        conversation=conversation,
+    )
+    await session.commit()
+
+    peer_user_id = _peer_user_id(
+        conversation.user_a_id,
+        conversation.user_b_id,
+        current_user.id,
+    )
+
+    audit_log(
+        "conversation_deleted",
+        user_id=current_user.id,
+        conversation_id=conversation_id,
+        extra={
+            "deleted_messages_count": deleted_messages_count,
+            "deleted_attachment_ids": deleted_attachment_ids,
+        },
+    )
+    _enqueue_recompute_unread(current_user.id)
+    if not _is_self_conversation(conversation=conversation):
+        _enqueue_recompute_unread(peer_user_id)
+
+    realtime_payload = _event_to_realtime_payload(
+        conversation_id=conversation_id,
+        event_type=EventType.CONVERSATION_DELETED.value,
+        event_id=0,
+        event_uuid=str(uuid4()),
+        actor_user_id=current_user.id,
+        actor_device_id=None,
+        target_message_id=None,
+        payload={
+            "deleted": True,
+            "deleted_messages_count": deleted_messages_count,
+            "deleted_attachment_ids": deleted_attachment_ids,
+        },
+        created_at=_now(),
+    )
+    await realtime_hub.publish_user_event(current_user.id, realtime_payload)
+    await realtime_hub.publish_user_event(peer_user_id, realtime_payload)
+
+    return DeleteConversationResponseData(
+        conversation_id=conversation_id,
+        deleted=True,
+        deleted_messages_count=deleted_messages_count,
+        deleted_attachment_ids=deleted_attachment_ids,
+    )
