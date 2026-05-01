@@ -60,12 +60,14 @@ async def list_messages_endpoint(
     anchor_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ListMessagesResponseData]:
     """List messages for one conversation with cursor or anchor pagination."""
     result = await list_messages(
         session,
         current_user=current_user,
+        current_device=current_device,
         conversation_id=conversation_id,
         before_id=before_id,
         after_id=after_id,
@@ -267,12 +269,14 @@ async def search_messages_endpoint(
     q: str = Query(min_length=1, max_length=255),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SearchMessagesResponseData]:
     """Search messages inside a single conversation."""
     data = await search_messages(
         session,
         current_user=current_user,
+        current_device=current_device,
         conversation_id=conversation_id,
         query=q,
         limit=limit,
@@ -295,12 +299,14 @@ async def list_shared_messages_endpoint(
     before_message_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SharedMessagesResponseData]:
     """List conversation items for Telegram-like media, links and files tabs."""
     data = await list_shared_messages(
         session,
         current_user=current_user,
+        current_device=current_device,
         conversation_id=conversation_id,
         tab=tab,
         before_message_id=before_message_id,

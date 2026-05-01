@@ -14,6 +14,7 @@ from app.models.device_prekey import DevicePreKey
 from app.models.login_attempt import LoginAttempt
 from app.models.message import (
     Message,
+    MessageDevicePayload,
     MessageReaction,
     MessageRecipientState,
     MessageVisibilityOverride,
@@ -35,6 +36,7 @@ __all__ = [
     "DevicePreKey",
     "LoginAttempt",
     "Message",
+    "MessageDevicePayload",
     "MessageReaction",
     "MessageRecipientState",
     "MessageVisibilityOverride",

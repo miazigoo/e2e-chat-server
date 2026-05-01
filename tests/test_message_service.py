@@ -228,8 +228,8 @@ async def test_send_message_when_recipient_has_no_device(
     ) -> Any:
         return conversation
 
-    async def fake_get_active_by_user_id(session: Any, user_id: int) -> Any:
-        return None
+    async def fake_list_active_by_user_id(session: Any, user_id: int) -> list[Any]:
+        return []
 
     monkeypatch.setattr(
         message_service.conversations_repo,
@@ -238,8 +238,8 @@ async def test_send_message_when_recipient_has_no_device(
     )
     monkeypatch.setattr(
         message_service.devices_repo,
-        "get_active_by_user_id",
-        fake_get_active_by_user_id,
+        "list_active_by_user_id",
+        fake_list_active_by_user_id,
     )
     _patch_participant(monkeypatch)
 
@@ -282,9 +282,6 @@ async def test_send_message_to_saved_messages_uses_current_device(
     ) -> Any:
         return conversation
 
-    async def fake_get_active_by_user_id(session: Any, user_id: int) -> Any:
-        return None
-
     async def fake_get_by_message_uuid(
         session: Any,
         conversation_id: int,
@@ -317,6 +314,9 @@ async def test_send_message_to_saved_messages_uses_current_device(
             message_id=kwargs["message_id"],
             recipient_device_id=kwargs["recipient_device_id"],
         )
+
+    async def fake_create_device_payloads(session: Any, **kwargs: Any) -> list[Any]:
+        return []
 
     async def fake_mark_delivered(
         session: Any,
@@ -368,11 +368,6 @@ async def test_send_message_to_saved_messages_uses_current_device(
         fake_get_for_user,
     )
     monkeypatch.setattr(
-        message_service.devices_repo,
-        "get_active_by_user_id",
-        fake_get_active_by_user_id,
-    )
-    monkeypatch.setattr(
         message_service.messages_repo,
         "get_by_message_uuid",
         fake_get_by_message_uuid,
@@ -386,6 +381,11 @@ async def test_send_message_to_saved_messages_uses_current_device(
         message_service.messages_repo,
         "create_recipient_state",
         fake_create_recipient_state,
+    )
+    monkeypatch.setattr(
+        message_service.messages_repo,
+        "create_device_payloads",
+        fake_create_device_payloads,
     )
     monkeypatch.setattr(
         message_service.messages_repo,
@@ -873,9 +873,10 @@ async def test_list_messages_around_anchor(
         session: Any,
         *,
         current_user: Any,
+        current_device: Any,
         messages: list[Any],
     ) -> list[Any]:
-        _ = (session, current_user)
+        _ = (session, current_user, current_device)
         return [SimpleNamespace(message_id=message.id) for message in messages]
 
     monkeypatch.setattr(
@@ -907,6 +908,7 @@ async def test_list_messages_around_anchor(
     result = await message_service.list_messages(
         cast(Any, SimpleNamespace()),
         current_user=cast(Any, SimpleNamespace(id=1)),
+        current_device=cast(Any, _device()),
         conversation_id=1,
         before_id=None,
         after_id=None,
@@ -949,9 +951,10 @@ async def test_list_messages_after_cursor(
         session: Any,
         *,
         current_user: Any,
+        current_device: Any,
         messages: list[Any],
     ) -> list[Any]:
-        _ = (session, current_user)
+        _ = (session, current_user, current_device)
         return [SimpleNamespace(message_id=message.id) for message in messages]
 
     monkeypatch.setattr(
@@ -973,6 +976,7 @@ async def test_list_messages_after_cursor(
     result = await message_service.list_messages(
         cast(Any, SimpleNamespace()),
         current_user=cast(Any, SimpleNamespace(id=1)),
+        current_device=cast(Any, _device()),
         conversation_id=1,
         before_id=None,
         after_id=20,
@@ -992,6 +996,7 @@ async def test_list_messages_rejects_multiple_cursors() -> None:
         await message_service.list_messages(
             cast(Any, SimpleNamespace()),
             current_user=cast(Any, SimpleNamespace(id=1)),
+            current_device=cast(Any, _device()),
             conversation_id=1,
             before_id=10,
             after_id=None,
@@ -1025,6 +1030,7 @@ async def test_search_messages_blank_query_returns_empty(
     result = await message_service.search_messages(
         cast(Any, SimpleNamespace()),
         current_user=cast(Any, SimpleNamespace(id=1)),
+        current_device=cast(Any, _device()),
         conversation_id=1,
         query="   ",
         limit=20,

@@ -3,9 +3,11 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError
+from app.models.message import MessageDevicePayload, MessageRecipientState
 from app.schemas.messages import DeleteMessagesRequest, SendMessageRequest
 from app.services.message_service import delete_global, send_message
 from tests.integration.helpers import (
@@ -126,3 +128,105 @@ async def test_delete_global_does_not_delete_foreign_messages(
     )
 
     assert result["message_ids"] == [sender_msg["message_id"]]
+
+
+async def test_send_message_fans_out_to_all_active_recipient_devices(
+    session: AsyncSession,
+) -> None:
+    sender = await create_user(session, nickname="@sender-fanout")
+    recipient = await create_user(session, nickname="@recipient-fanout")
+    sender_device = await create_device(
+        session, user_id=sender.id, device_uuid="sender-fanout-device"
+    )
+    recipient_device_1 = await create_device(
+        session, user_id=recipient.id, device_uuid="recipient-fanout-1"
+    )
+    recipient_device_2 = await create_device(
+        session, user_id=recipient.id, device_uuid="recipient-fanout-2"
+    )
+    revoked_recipient_device = await create_device(
+        session,
+        user_id=recipient.id,
+        device_uuid="recipient-fanout-revoked",
+        is_active=False,
+    )
+    conversation = await create_conversation(
+        session,
+        user_a_id=sender.id,
+        user_b_id=recipient.id,
+        created_by_user_id=sender.id,
+        message_ttl_days=30,
+    )
+    await session.commit()
+
+    result = await send_message(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        payload=SendMessageRequest(
+            conversation_id=conversation.id,
+            recipient_user_id=recipient.id,
+            message_uuid=str(uuid4()),
+            message_type="text",
+            ciphertext="legacy-cipher",
+            ciphertext_version=1,
+            encryption_mode="signal",
+            nonce="legacy-nonce",
+            client_created_at=now_utc(),
+            expires_at=now_utc() + timedelta(days=1),
+            device_payloads=[
+                {
+                    "device_id": recipient_device_1.id,
+                    "ciphertext": "cipher-1",
+                    "ciphertext_version": 1,
+                    "nonce": "nonce-1",
+                },
+                {
+                    "device_id": recipient_device_2.id,
+                    "ciphertext": "cipher-2",
+                    "ciphertext_version": 1,
+                    "nonce": "nonce-2",
+                },
+            ],
+        ),
+    )
+
+    assert result["recipient_device_ids"] == [
+        recipient_device_1.id,
+        recipient_device_2.id,
+    ]
+
+    states = (
+        (
+            await session.execute(
+                select(MessageRecipientState).where(
+                    MessageRecipientState.message_id == result["message_id"]
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    payloads = (
+        (
+            await session.execute(
+                select(MessageDevicePayload).where(
+                    MessageDevicePayload.message_id == result["message_id"]
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert {state.recipient_device_id for state in states} == {
+        recipient_device_1.id,
+        recipient_device_2.id,
+    }
+    assert {payload.device_id for payload in payloads} == {
+        recipient_device_1.id,
+        recipient_device_2.id,
+    }
+    assert revoked_recipient_device.id not in {
+        state.recipient_device_id for state in states
+    }

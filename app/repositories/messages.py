@@ -12,6 +12,7 @@ from app.models.chat_enums import (
 )
 from app.models.message import (
     Message,
+    MessageDevicePayload,
     MessageReaction,
     MessageRecipientState,
     MessageVisibilityOverride,
@@ -83,6 +84,57 @@ class MessagesRepository:
         session.add(state)
         await session.flush()
         return state
+
+    async def create_device_payloads(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+        payloads: list[dict[str, str | int | None]],
+    ) -> list[MessageDevicePayload]:
+        created: list[MessageDevicePayload] = []
+        for payload in payloads:
+            device_id = payload["device_id"]
+            ciphertext_version = payload["ciphertext_version"]
+            if not isinstance(device_id, int) or not isinstance(
+                ciphertext_version, int
+            ):
+                raise TypeError("message device payload ids and versions must be ints")
+            item = MessageDevicePayload(
+                message_id=message_id,
+                device_id=device_id,
+                ciphertext=str(payload["ciphertext"]),
+                ciphertext_version=ciphertext_version,
+                nonce=str(payload["nonce"]),
+                aad_hash=(
+                    str(payload["aad_hash"])
+                    if payload.get("aad_hash") is not None
+                    else None
+                ),
+            )
+            session.add(item)
+            created.append(item)
+
+        await session.flush()
+        return created
+
+    async def list_device_payloads_for_messages(
+        self,
+        session: AsyncSession,
+        *,
+        message_ids: list[int],
+        device_id: int,
+    ) -> list[MessageDevicePayload]:
+        if not message_ids:
+            return []
+
+        result = await session.execute(
+            select(MessageDevicePayload).where(
+                MessageDevicePayload.message_id.in_(message_ids),
+                MessageDevicePayload.device_id == device_id,
+            )
+        )
+        return list(result.scalars().all())
 
     async def list_for_user(
         self,
@@ -188,14 +240,32 @@ class MessagesRepository:
         recipient_device_id: int,
     ) -> Message | None:
         result = await session.execute(
-            select(Message).where(
+            select(Message)
+            .join(
+                MessageRecipientState,
+                MessageRecipientState.message_id == Message.id,
+            )
+            .where(
                 Message.id == message_id,
                 Message.recipient_user_id == user_id,
-                Message.recipient_device_id == recipient_device_id,
+                MessageRecipientState.recipient_device_id == recipient_device_id,
                 Message.is_deleted_global.is_(False),
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_recipient_states_for_message(
+        self,
+        session: AsyncSession,
+        *,
+        message_id: int,
+    ) -> list[MessageRecipientState]:
+        result = await session.execute(
+            select(MessageRecipientState)
+            .where(MessageRecipientState.message_id == message_id)
+            .order_by(MessageRecipientState.recipient_device_id.asc())
+        )
+        return list(result.scalars().all())
 
     async def get_recipient_state(
         self,

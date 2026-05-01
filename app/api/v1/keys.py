@@ -10,6 +10,7 @@ from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.keys import (
     KeyBundleResponseData,
+    KeyBundlesResponseData,
     RefillPreKeysRequest,
     RefillPreKeysResponseData,
     RotateSignedPreKeyRequest,
@@ -17,11 +18,32 @@ from app.schemas.keys import (
 )
 from app.services.key_service import (
     get_key_bundle_for_user,
+    get_key_bundles_for_user,
     refill_prekeys,
     rotate_signed_prekey,
 )
 
 router = APIRouter()
+
+
+@router.get(
+    "/bundles/{user_id}",
+    response_model=ApiResponse[KeyBundlesResponseData],
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def get_key_bundles(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[KeyBundlesResponseData]:
+    data = await get_key_bundles_for_user(
+        session,
+        current_user=current_user,
+        current_device=current_device,
+        target_user_id=user_id,
+    )
+    return ApiResponse(data=KeyBundlesResponseData(**data))
 
 
 @router.get(

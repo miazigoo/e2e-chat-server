@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import COMMON_ERROR_RESPONSES
 from app.core.db import get_db
 from app.dependencies.auth import get_current_user
+from app.dependencies.device import get_current_device
+from app.models.device import Device
 from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.conversations import (
@@ -94,11 +96,13 @@ async def list_conversation_messages_endpoint(
     anchor_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
+    current_device: Device = Depends(get_current_device),
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ListMessagesResponseData]:
     data = await list_messages(
         session,
         current_user=current_user,
+        current_device=current_device,
         conversation_id=conversation_id,
         before_id=before_id,
         after_id=after_id,

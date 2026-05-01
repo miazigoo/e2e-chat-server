@@ -27,6 +27,7 @@ from app.schemas.messages import (
     ForwardMessagesRequest,
     MarkDeliveredRequest,
     MarkReadRequest,
+    MessageDevicePayloadSchema,
     MessageListItemSchema,
     MessagePreviewSchema,
     MessageReactionSummarySchema,
@@ -195,6 +196,80 @@ def _validate_encryption_mode_for_participant(
         )
 
 
+async def _target_devices_for_message(
+    session: AsyncSession,
+    *,
+    conversation: Any,
+    current_device: Device,
+    recipient_user_id: int,
+) -> list[Device]:
+    if _is_self_conversation(conversation=conversation):
+        return [current_device]
+
+    devices = await devices_repo.list_active_by_user_id(
+        session,
+        user_id=recipient_user_id,
+    )
+    if not devices:
+        raise ConflictError(
+            code="RECIPIENT_DEVICE_NOT_READY",
+            message="Recipient has no active device",
+        )
+    return devices
+
+
+def _payloads_for_devices(
+    *,
+    target_devices: list[Device],
+    payload: SendMessageRequest,
+) -> list[dict[str, str | int | None]]:
+    target_device_ids = {device.id for device in target_devices}
+    provided_by_device_id = {item.device_id: item for item in payload.device_payloads}
+    unknown_device_ids = set(provided_by_device_id) - target_device_ids
+    if unknown_device_ids:
+        raise BadRequestError(
+            code="INVALID_DEVICE_PAYLOADS",
+            message="device_payloads contains devices outside the active recipient set",
+        )
+
+    return [
+        {
+            "device_id": device.id,
+            "ciphertext": (
+                provided_by_device_id[device.id].ciphertext
+                if device.id in provided_by_device_id
+                else payload.ciphertext
+            ),
+            "ciphertext_version": (
+                provided_by_device_id[device.id].ciphertext_version
+                if device.id in provided_by_device_id
+                else payload.ciphertext_version
+            ),
+            "nonce": (
+                provided_by_device_id[device.id].nonce
+                if device.id in provided_by_device_id
+                else payload.nonce
+            ),
+            "aad_hash": (
+                provided_by_device_id[device.id].aad_hash
+                if device.id in provided_by_device_id
+                else payload.aad_hash
+            ),
+        }
+        for device in target_devices
+    ]
+
+
+def _payload_schema_from_payload(payload: Any) -> MessageDevicePayloadSchema:
+    return MessageDevicePayloadSchema(
+        device_id=payload.device_id,
+        ciphertext=payload.ciphertext,
+        ciphertext_version=payload.ciphertext_version,
+        nonce=payload.nonce,
+        aad_hash=payload.aad_hash,
+    )
+
+
 class ReactionSummary(TypedDict):
     reaction: str
     count: int
@@ -275,12 +350,29 @@ async def _get_reactable_message(
 
 
 def _preview_from_message(message: Any) -> MessagePreviewSchema:
+    device_payload = getattr(message, "_current_device_payload", None)
     return MessagePreviewSchema(
         message_id=message.id,
         message_uuid=message.message_uuid,
         sender_user_id=message.sender_user_id,
         message_type=message.message_type,
-        ciphertext=message.ciphertext,
+        ciphertext=device_payload.ciphertext if device_payload else message.ciphertext,
+        ciphertext_version=(
+            device_payload.ciphertext_version
+            if device_payload
+            else getattr(message, "ciphertext_version", None)
+        ),
+        nonce=(
+            device_payload.nonce if device_payload else getattr(message, "nonce", None)
+        ),
+        aad_hash=(
+            device_payload.aad_hash
+            if device_payload
+            else getattr(message, "aad_hash", None)
+        ),
+        device_payload=(
+            _payload_schema_from_payload(device_payload) if device_payload else None
+        ),
         has_attachments=message.has_attachments,
         client_created_at=message.client_created_at,
     )
@@ -290,6 +382,7 @@ async def _build_message_items(
     session: AsyncSession,
     *,
     current_user: User,
+    current_device: Device,
     messages: list[Any],
 ) -> list[MessageListItemSchema]:
     if not messages:
@@ -318,6 +411,28 @@ async def _build_message_items(
         )
         previews_by_id = {message.id: message for message in previews}
 
+    payload_message_ids = list(set(message_ids) | preview_ids)
+    payloads = await messages_repo.list_device_payloads_for_messages(
+        session,
+        message_ids=payload_message_ids,
+        device_id=current_device.id,
+    )
+    payloads_by_message_id = {payload.message_id: payload for payload in payloads}
+    for message in messages:
+        if message.id in payloads_by_message_id:
+            setattr(
+                message,
+                "_current_device_payload",
+                payloads_by_message_id[message.id],
+            )
+    for preview in previews_by_id.values():
+        if preview.id in payloads_by_message_id:
+            setattr(
+                preview,
+                "_current_device_payload",
+                payloads_by_message_id[preview.id],
+            )
+
     return [
         MessageListItemSchema(
             message_id=message.id,
@@ -325,11 +440,32 @@ async def _build_message_items(
             sender_user_id=message.sender_user_id,
             recipient_user_id=message.recipient_user_id,
             message_type=message.message_type,
-            ciphertext=message.ciphertext,
-            ciphertext_version=message.ciphertext_version,
+            ciphertext=(
+                payloads_by_message_id[message.id].ciphertext
+                if message.id in payloads_by_message_id
+                else message.ciphertext
+            ),
+            ciphertext_version=(
+                payloads_by_message_id[message.id].ciphertext_version
+                if message.id in payloads_by_message_id
+                else message.ciphertext_version
+            ),
             encryption_mode=message.encryption_mode,
-            nonce=message.nonce,
-            aad_hash=message.aad_hash,
+            nonce=(
+                payloads_by_message_id[message.id].nonce
+                if message.id in payloads_by_message_id
+                else message.nonce
+            ),
+            aad_hash=(
+                payloads_by_message_id[message.id].aad_hash
+                if message.id in payloads_by_message_id
+                else message.aad_hash
+            ),
+            device_payload=(
+                _payload_schema_from_payload(payloads_by_message_id[message.id])
+                if message.id in payloads_by_message_id
+                else None
+            ),
             client_created_at=message.client_created_at,
             server_received_at=message.server_received_at,
             delivered_at=message.delivered_at,
@@ -447,17 +583,17 @@ async def send_message(
         encryption_mode=payload.encryption_mode,
     )
 
-    recipient_device = await devices_repo.get_active_by_user_id(
+    recipient_devices = await _target_devices_for_message(
         session,
-        user_id=payload.recipient_user_id,
+        conversation=conversation,
+        current_device=current_device,
+        recipient_user_id=payload.recipient_user_id,
     )
-    if _is_self_conversation(conversation=conversation):
-        recipient_device = current_device
-    if not recipient_device:
-        raise ConflictError(
-            code="RECIPIENT_DEVICE_NOT_READY",
-            message="Recipient has no active device",
-        )
+    recipient_device = recipient_devices[0]
+    device_payloads = _payloads_for_devices(
+        target_devices=recipient_devices,
+        payload=payload,
+    )
 
     attachments = []
     if payload.attachment_ids:
@@ -515,12 +651,18 @@ async def send_message(
     )
 
     if existing_message is not None:
+        states = await messages_repo.list_recipient_states_for_message(
+            session,
+            message_id=existing_message.id,
+        )
         return {
             "message_id": existing_message.id,
             "message_uuid": existing_message.message_uuid,
             "conversation_id": existing_message.conversation_id,
             "recipient_user_id": existing_message.recipient_user_id,
             "recipient_device_id": existing_message.recipient_device_id,
+            "recipient_device_ids": [state.recipient_device_id for state in states]
+            or [existing_message.recipient_device_id],
             "server_received_at": existing_message.server_received_at,
             "delivery_status": "server_received",
             "is_idempotent_replay": True,
@@ -548,25 +690,36 @@ async def send_message(
         has_attachments=bool(payload.attachment_ids),
     )
 
-    recipient_state = await messages_repo.create_recipient_state(
+    await messages_repo.create_device_payloads(
         session,
         message_id=message.id,
-        recipient_user_id=payload.recipient_user_id,
-        recipient_device_id=recipient_device.id,
+        payloads=device_payloads,
     )
+
+    recipient_states = []
+    for device in recipient_devices:
+        recipient_state = await messages_repo.create_recipient_state(
+            session,
+            message_id=message.id,
+            recipient_user_id=payload.recipient_user_id,
+            recipient_device_id=device.id,
+        )
+        recipient_states.append(recipient_state)
+
     if _is_self_conversation(conversation=conversation):
-        await messages_repo.mark_delivered(
-            session,
-            message=message,
-            state=recipient_state,
-            delivered_at=now_dt,
-        )
-        await messages_repo.mark_read(
-            session,
-            message=message,
-            state=recipient_state,
-            read_at=now_dt,
-        )
+        for recipient_state in recipient_states:
+            await messages_repo.mark_delivered(
+                session,
+                message=message,
+                state=recipient_state,
+                delivered_at=now_dt,
+            )
+            await messages_repo.mark_read(
+                session,
+                message=message,
+                state=recipient_state,
+                read_at=now_dt,
+            )
 
     if attachments:
         await files_repo.link_attachments_to_message(
@@ -592,6 +745,7 @@ async def send_message(
             "sender_device_id": message.sender_device_id,
             "recipient_user_id": message.recipient_user_id,
             "recipient_device_id": message.recipient_device_id,
+            "recipient_device_ids": [device.id for device in recipient_devices],
             "message_type": message.message_type.value,
             "encryption_mode": message.encryption_mode.value,
             "has_attachments": message.has_attachments,
@@ -654,6 +808,7 @@ async def send_message(
         "conversation_id": message.conversation_id,
         "recipient_user_id": message.recipient_user_id,
         "recipient_device_id": message.recipient_device_id,
+        "recipient_device_ids": [device.id for device in recipient_devices],
         "server_received_at": message.server_received_at,
         "delivery_status": "server_received",
         "is_idempotent_replay": False,
@@ -664,6 +819,7 @@ async def list_messages(
     session: AsyncSession,
     *,
     current_user: User,
+    current_device: Device,
     conversation_id: int,
     before_id: int | None,
     after_id: int | None,
@@ -733,6 +889,7 @@ async def list_messages(
         items = await _build_message_items(
             session,
             current_user=current_user,
+            current_device=current_device,
             messages=ordered_messages,
         )
         return {
@@ -758,6 +915,7 @@ async def list_messages(
         items = await _build_message_items(
             session,
             current_user=current_user,
+            current_device=current_device,
             messages=ordered_messages,
         )
         return {
@@ -783,6 +941,7 @@ async def list_messages(
     items = await _build_message_items(
         session,
         current_user=current_user,
+        current_device=current_device,
         messages=ordered_messages,
     )
     return {
@@ -799,6 +958,7 @@ async def search_messages(
     session: AsyncSession,
     *,
     current_user: User,
+    current_device: Device,
     conversation_id: int,
     query: str,
     limit: int,
@@ -837,6 +997,7 @@ async def search_messages(
         items=await _build_message_items(
             session,
             current_user=current_user,
+            current_device=current_device,
             messages=messages,
         ),
     )
@@ -846,6 +1007,7 @@ async def list_shared_messages(
     session: AsyncSession,
     *,
     current_user: User,
+    current_device: Device,
     conversation_id: int,
     tab: str,
     before_message_id: int | None,
@@ -892,6 +1054,7 @@ async def list_shared_messages(
         items=await _build_message_items(
             session,
             current_user=current_user,
+            current_device=current_device,
             messages=messages,
         ),
     )
@@ -942,17 +1105,13 @@ async def forward_messages(
             message="Conversation not found",
         )
 
-    recipient_device = await devices_repo.get_active_by_user_id(
+    recipient_devices = await _target_devices_for_message(
         session,
-        user_id=payload.recipient_user_id,
+        conversation=conversation,
+        current_device=current_device,
+        recipient_user_id=payload.recipient_user_id,
     )
-    if _is_self_conversation(conversation=conversation):
-        recipient_device = current_device
-    if recipient_device is None:
-        raise ConflictError(
-            code="RECIPIENT_DEVICE_NOT_READY",
-            message="Recipient has no active device",
-        )
+    recipient_device = recipient_devices[0]
 
     client_created_at = payload.client_created_at or _now()
     if client_created_at > _now() + timedelta(minutes=5):
@@ -997,25 +1156,43 @@ async def forward_messages(
             auto_delete_after_read_seconds=conversation.delete_after_read_seconds,
             has_attachments=source_message.has_attachments,
         )
-        recipient_state = await messages_repo.create_recipient_state(
+        await messages_repo.create_device_payloads(
             session,
             message_id=forwarded_message.id,
-            recipient_user_id=payload.recipient_user_id,
-            recipient_device_id=recipient_device.id,
+            payloads=[
+                {
+                    "device_id": device.id,
+                    "ciphertext": source_message.ciphertext,
+                    "ciphertext_version": source_message.ciphertext_version,
+                    "nonce": source_message.nonce,
+                    "aad_hash": source_message.aad_hash,
+                }
+                for device in recipient_devices
+            ],
         )
+        recipient_states = []
+        for device in recipient_devices:
+            recipient_state = await messages_repo.create_recipient_state(
+                session,
+                message_id=forwarded_message.id,
+                recipient_user_id=payload.recipient_user_id,
+                recipient_device_id=device.id,
+            )
+            recipient_states.append(recipient_state)
         if _is_self_conversation(conversation=conversation):
-            await messages_repo.mark_delivered(
-                session,
-                message=forwarded_message,
-                state=recipient_state,
-                delivered_at=client_created_at,
-            )
-            await messages_repo.mark_read(
-                session,
-                message=forwarded_message,
-                state=recipient_state,
-                read_at=client_created_at,
-            )
+            for recipient_state in recipient_states:
+                await messages_repo.mark_delivered(
+                    session,
+                    message=forwarded_message,
+                    state=recipient_state,
+                    delivered_at=client_created_at,
+                )
+                await messages_repo.mark_read(
+                    session,
+                    message=forwarded_message,
+                    state=recipient_state,
+                    read_at=client_created_at,
+                )
         if source_message.has_attachments:
             await _clone_forward_attachments(
                 session,
@@ -1039,6 +1216,7 @@ async def forward_messages(
                 "sender_device_id": forwarded_message.sender_device_id,
                 "recipient_user_id": forwarded_message.recipient_user_id,
                 "recipient_device_id": forwarded_message.recipient_device_id,
+                "recipient_device_ids": [device.id for device in recipient_devices],
                 "message_type": forwarded_message.message_type.value,
                 "has_attachments": forwarded_message.has_attachments,
                 "client_created_at": forwarded_message.client_created_at.isoformat(),
@@ -1063,6 +1241,7 @@ async def forward_messages(
                 "message_id": forwarded_message.id,
                 "message_uuid": forwarded_message.message_uuid,
                 "recipient_device_id": forwarded_message.recipient_device_id,
+                "recipient_device_ids": [device.id for device in recipient_devices],
                 "server_received_at": forwarded_message.server_received_at,
             }
         )

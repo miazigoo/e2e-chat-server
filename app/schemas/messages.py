@@ -27,6 +27,10 @@ class SendMessageRequest(BaseModel):
     auto_delete_after_read_seconds: int | None = Field(default=None, gt=0)
 
     attachment_ids: list[int] = Field(default_factory=list, max_length=20)
+    device_payloads: list["MessageDevicePayloadRequest"] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
     @field_validator("message_uuid")
     @classmethod
@@ -42,6 +46,32 @@ class SendMessageRequest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("attachment_ids must be unique")
         return value
+
+    @field_validator("device_payloads")
+    @classmethod
+    def validate_device_payloads_unique(
+        cls, value: list["MessageDevicePayloadRequest"]
+    ) -> list["MessageDevicePayloadRequest"]:
+        device_ids = [item.device_id for item in value]
+        if len(device_ids) != len(set(device_ids)):
+            raise ValueError("device_payloads device_id values must be unique")
+        return value
+
+
+class MessageDevicePayloadRequest(BaseModel):
+    device_id: int = Field(ge=1)
+    ciphertext: str = Field(min_length=1)
+    ciphertext_version: int = Field(default=1, ge=1)
+    nonce: str = Field(min_length=1)
+    aad_hash: str | None = None
+
+
+class MessageDevicePayloadSchema(BaseModel):
+    device_id: int
+    ciphertext: str
+    ciphertext_version: int
+    nonce: str
+    aad_hash: str | None = None
 
 
 class ForwardMessagesRequest(BaseModel):
@@ -100,6 +130,7 @@ class SendMessageResponseData(BaseModel):
     conversation_id: int
     recipient_user_id: int
     recipient_device_id: int
+    recipient_device_ids: list[int] = Field(default_factory=list)
     server_received_at: datetime
     delivery_status: str
     is_idempotent_replay: bool = False
@@ -112,6 +143,7 @@ class ForwardedMessageItemSchema(BaseModel):
     message_id: int
     message_uuid: str
     recipient_device_id: int
+    recipient_device_ids: list[int] = Field(default_factory=list)
     server_received_at: datetime
 
 
@@ -139,6 +171,10 @@ class MessagePreviewSchema(BaseModel):
     sender_user_id: int
     message_type: MessageType
     ciphertext: str
+    ciphertext_version: int | None = None
+    nonce: str | None = None
+    aad_hash: str | None = None
+    device_payload: MessageDevicePayloadSchema | None = None
     has_attachments: bool
     client_created_at: datetime
 
@@ -156,6 +192,7 @@ class MessageListItemSchema(BaseModel):
     encryption_mode: EncryptionMode
     nonce: str
     aad_hash: str | None = None
+    device_payload: MessageDevicePayloadSchema | None = None
     client_created_at: datetime
     server_received_at: datetime
     delivered_at: datetime | None = None

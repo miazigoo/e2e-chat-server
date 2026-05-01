@@ -196,6 +196,38 @@ class MessageRecipientState(Base):
     )
 
 
+class MessageDevicePayload(Base):
+    __tablename__ = "message_device_payloads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    ciphertext_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    aad_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "device_id",
+            name="uq_message_device_payloads_message_device",
+        ),
+        Index("ix_message_device_payloads_device", "device_id"),
+    )
+
+
 class MessageVisibilityOverride(Base):
     __tablename__ = "message_visibility_overrides"
 

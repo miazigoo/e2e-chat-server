@@ -30,6 +30,25 @@ class KeyBundleResponseData(BaseModel):
     prekeys_remaining: int
 
 
+class KeyBundleItemSchema(BaseModel):
+    user_id: int
+    device_id: int
+    requested_by_device_id: int
+    registration_id: int
+    public_identity_key: str
+    public_signing_key: str
+    signed_prekey_id: int
+    signed_prekey: str
+    signed_prekey_signature: str
+    one_time_prekey: OneTimePreKeySchema | None = None
+    prekeys_remaining: int
+
+
+class KeyBundlesResponseData(BaseModel):
+    user_id: int
+    devices: list[KeyBundleItemSchema]
+
+
 class RefillPreKeysResponseData(BaseModel):
     device_id: int
     added: int

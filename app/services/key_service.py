@@ -77,6 +77,79 @@ async def get_key_bundle_for_user(
     }
 
 
+async def get_key_bundles_for_user(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    current_device: Device,
+    target_user_id: int,
+) -> dict:
+    if target_user_id == current_user.id:
+        raise BadRequestError(
+            code="SELF_BUNDLE_REQUEST_NOT_ALLOWED",
+            message="Cannot request bundle for yourself",
+        )
+
+    target_user = await users_repo.get_by_id(session, target_user_id)
+    if not target_user or target_user.is_deleted or target_user.pending_deletion:
+        raise NotFoundError(
+            code="TARGET_USER_NOT_FOUND",
+            message="Target user not found",
+        )
+
+    target_devices = await devices_repo.list_active_by_user_id(
+        session,
+        user_id=target_user_id,
+    )
+    if not target_devices:
+        raise ConflictError(
+            code="TARGET_DEVICE_NOT_READY",
+            message="Target user has no active device",
+        )
+
+    devices = []
+    for target_device in target_devices:
+        claimed_prekey = await keys_repo.claim_one_time_prekey(
+            session,
+            device_id=target_device.id,
+        )
+        remaining_prekeys = await keys_repo.count_available_prekeys(
+            session,
+            device_id=target_device.id,
+        )
+        target_device.prekeys_count = remaining_prekeys
+
+        devices.append(
+            {
+                "user_id": target_user.id,
+                "device_id": target_device.id,
+                "requested_by_device_id": current_device.id,
+                "registration_id": target_device.registration_id,
+                "public_identity_key": target_device.public_identity_key,
+                "public_signing_key": target_device.public_signing_key,
+                "signed_prekey_id": target_device.signed_prekey_id,
+                "signed_prekey": target_device.signed_prekey,
+                "signed_prekey_signature": target_device.signed_prekey_signature,
+                "one_time_prekey": (
+                    {
+                        "prekey_id": claimed_prekey.prekey_id,
+                        "public_prekey": claimed_prekey.public_prekey,
+                    }
+                    if claimed_prekey is not None
+                    else None
+                ),
+                "prekeys_remaining": remaining_prekeys,
+            }
+        )
+
+    await session.commit()
+
+    return {
+        "user_id": target_user.id,
+        "devices": devices,
+    }
+
+
 async def refill_prekeys(
     session: AsyncSession,
     *,
