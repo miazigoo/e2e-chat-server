@@ -59,6 +59,13 @@ def build_new_message_push_payload(
     }
 
 
+def build_device_approval_push_payload(*, request_id: str) -> dict[str, str]:
+    return {
+        "type": "device_approval_requested",
+        "request_id": request_id,
+    }
+
+
 def build_generic_event_push_payload(
     *,
     conversation_id: int,

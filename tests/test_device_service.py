@@ -10,7 +10,7 @@ from app.schemas.devices import BootstrapDeviceRequest
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_device_rejects_non_android() -> None:
+async def test_bootstrap_device_rejects_unsupported_platform() -> None:
     session = cast(Any, SimpleNamespace())
 
     with pytest.raises(BadRequestError) as exc:
@@ -47,11 +47,6 @@ async def test_bootstrap_device_deduplicates_prekeys(
     ) -> Any:
         return None
 
-    async def fake_deactivate_other_devices(
-        session: Any, user_id: int, keep_device_id: int | None
-    ) -> None:
-        return None
-
     async def fake_create_or_update_device(session: Any, **kwargs: Any) -> Any:
         return SimpleNamespace(
             id=10,
@@ -71,11 +66,6 @@ async def test_bootstrap_device_deduplicates_prekeys(
 
     monkeypatch.setattr(
         device_service.devices_repo, "get_by_user_and_uuid", fake_get_by_user_and_uuid
-    )
-    monkeypatch.setattr(
-        device_service.devices_repo,
-        "deactivate_other_devices",
-        fake_deactivate_other_devices,
     )
     monkeypatch.setattr(
         device_service.devices_repo,
@@ -132,11 +122,6 @@ async def test_bootstrap_device_updates_existing_device(
     ) -> Any:
         return existing_device
 
-    async def fake_deactivate_other_devices(
-        session: Any, user_id: int, keep_device_id: int | None
-    ) -> None:
-        return None
-
     async def fake_create_or_update_device(session: Any, **kwargs: Any) -> Any:
         return existing_device
 
@@ -150,11 +135,6 @@ async def test_bootstrap_device_updates_existing_device(
 
     monkeypatch.setattr(
         device_service.devices_repo, "get_by_user_and_uuid", fake_get_by_user_and_uuid
-    )
-    monkeypatch.setattr(
-        device_service.devices_repo,
-        "deactivate_other_devices",
-        fake_deactivate_other_devices,
     )
     monkeypatch.setattr(
         device_service.devices_repo,

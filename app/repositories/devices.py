@@ -31,7 +31,44 @@ class DevicesRepository:
         user_id: int,
     ) -> Device | None:
         result = await session.execute(
+            select(Device)
+            .where(
+                Device.user_id == user_id,
+                Device.is_active.is_(True),
+                Device.revoked_at.is_(None),
+            )
+            .order_by(Device.id.asc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def list_active_by_user_id(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+    ) -> list[Device]:
+        result = await session.execute(
+            select(Device)
+            .where(
+                Device.user_id == user_id,
+                Device.is_active.is_(True),
+                Device.revoked_at.is_(None),
+            )
+            .order_by(Device.id.asc())
+        )
+        return list(result.scalars().all())
+
+    async def get_active_by_id_for_user(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: int,
+        device_id: int,
+    ) -> Device | None:
+        result = await session.execute(
             select(Device).where(
+                Device.id == device_id,
                 Device.user_id == user_id,
                 Device.is_active.is_(True),
                 Device.revoked_at.is_(None),

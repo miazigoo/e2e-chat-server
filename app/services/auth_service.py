@@ -19,6 +19,7 @@ from app.core.exceptions import (
     ServiceUnavailableError,
     UnauthorizedError,
 )
+from app.core.realtime import realtime_hub
 from app.core.security import (
     create_access_token,
     create_bootstrap_token,
@@ -40,6 +41,9 @@ from app.models.device import Device
 from app.models.user import User
 from app.repositories.auth import AuthRepository
 from app.repositories.auth_sessions import AuthSessionsRepository
+from app.repositories.device_authorization_requests import (
+    DeviceAuthorizationRequestsRepository,
+)
 from app.repositories.devices import DevicesRepository
 from app.repositories.users import UsersRepository
 from app.schemas.auth import (
@@ -54,6 +58,7 @@ users_repo = UsersRepository()
 auth_repo = AuthRepository()
 auth_sessions_repo = AuthSessionsRepository()
 devices_repo = DevicesRepository()
+device_auth_requests_repo = DeviceAuthorizationRequestsRepository()
 TOTP_ISSUER_FALLBACK = "Secure Chat"
 
 
@@ -146,6 +151,49 @@ def _bootstrap_response(*, user_id: int, nickname: str) -> dict:
     }
 
 
+def _device_approval_response(request_id: str) -> dict:
+    return {
+        "requires_bootstrap": False,
+        "requires_device_approval": True,
+        "device_approval_request_id": request_id,
+    }
+
+
+def _enqueue_device_approval_push(user_id: int, request_id: str) -> None:
+    try:
+        from app.worker.tasks import send_device_approval_push_task
+    except Exception:
+        return
+
+    dispatch_background_task(
+        task_name="send_device_approval_push_task",
+        dispatcher=send_device_approval_push_task.delay,
+        args=(user_id, request_id),
+        extra={"user_id": user_id, "request_id": request_id},
+    )
+
+
+async def _publish_device_approval_requested(
+    *,
+    user_id: int,
+    request_id: str,
+    device_uuid: str,
+    device_name: str | None,
+    platform: str | None,
+    app_version: str | None,
+) -> None:
+    payload = {
+        "type": "device_approval_requested",
+        "request_id": request_id,
+        "device_uuid": device_uuid,
+        "device_name": device_name,
+        "platform": platform,
+        "app_version": app_version,
+    }
+    await realtime_hub.publish_user_event(user_id, payload)
+    _enqueue_device_approval_push(user_id, request_id)
+
+
 def _email_code_exhausted(*, attempts: int) -> bool:
     return attempts >= settings.email_code_max_attempts
 
@@ -206,6 +254,11 @@ async def _resolve_device_for_auth(
     user_id: int,
     nickname: str,
     device_uuid: str | None,
+    device_name: str | None = None,
+    platform: str | None = None,
+    app_version: str | None = None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> tuple[Device | None, dict | None]:
     if device_uuid:
         device = await devices_repo.get_by_user_and_uuid(
@@ -223,10 +276,54 @@ async def _resolve_device_for_auth(
         if active_device is None:
             return None, _bootstrap_response(user_id=user_id, nickname=nickname)
 
-        raise ForbiddenError(
-            code="DEVICE_NOT_REGISTERED",
-            message="Device is not registered for this account",
+        now_dt = _now()
+        approval_request = await device_auth_requests_repo.get_latest_for_device(
+            session,
+            user_id=user_id,
+            device_uuid=device_uuid,
         )
+        if approval_request is not None:
+            if (
+                approval_request.status == "approved"
+                and approval_request.expires_at > now_dt
+            ):
+                return None, _bootstrap_response(user_id=user_id, nickname=nickname)
+            if (
+                approval_request.status == "pending"
+                and approval_request.expires_at > now_dt
+            ):
+                return None, _device_approval_response(approval_request.request_id)
+            if (
+                approval_request.status == "denied"
+                and approval_request.expires_at > now_dt
+            ):
+                raise ForbiddenError(
+                    code="DEVICE_APPROVAL_DENIED",
+                    message="New device approval was denied",
+                )
+
+        approval_request = await device_auth_requests_repo.create(
+            session,
+            request_id=str(uuid4()),
+            user_id=user_id,
+            device_uuid=device_uuid,
+            device_name=device_name,
+            platform=platform,
+            app_version=app_version,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            expires_at=now_dt
+            + timedelta(minutes=settings.bootstrap_token_expire_minutes),
+        )
+        await _publish_device_approval_requested(
+            user_id=user_id,
+            request_id=approval_request.request_id,
+            device_uuid=device_uuid,
+            device_name=device_name,
+            platform=platform,
+            app_version=app_version,
+        )
+        return None, _device_approval_response(approval_request.request_id)
 
     active_device = await devices_repo.get_active_by_user_id(
         session,
@@ -466,6 +563,11 @@ async def login_user(
         user_id=user.id,
         nickname=user.nickname,
         device_uuid=payload.device_uuid,
+        device_name=payload.device_name,
+        platform=payload.platform,
+        app_version=payload.app_version,
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
 
     if bootstrap_data is not None:
@@ -580,6 +682,11 @@ async def verify_email_code(
         user_id=user.id,
         nickname=user.nickname,
         device_uuid=payload.device_uuid,
+        device_name=payload.device_name,
+        platform=payload.platform,
+        app_version=payload.app_version,
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
 
     if bootstrap_data is not None:

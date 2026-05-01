@@ -317,6 +317,7 @@ async def test_login_success_without_2fa(
         user_id: int,
         nickname: str,
         device_uuid: str | None,
+        **kwargs: Any,
     ) -> tuple[Any, dict[str, Any] | None]:
         return SimpleNamespace(id=10), None
 

@@ -9,6 +9,7 @@ from app.models.conversation import (
     ConversationParticipant,
 )
 from app.models.device import Device
+from app.models.device_authorization_request import DeviceAuthorizationRequest
 from app.models.device_prekey import DevicePreKey
 from app.models.login_attempt import LoginAttempt
 from app.models.message import (
@@ -30,6 +31,7 @@ __all__ = [
     "ConversationEvent",
     "ConversationParticipant",
     "Device",
+    "DeviceAuthorizationRequest",
     "DevicePreKey",
     "LoginAttempt",
     "Message",

@@ -1,16 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import (
-    Boolean,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    Text,
-    func,
-    text,
-)
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -58,10 +48,4 @@ class Device(Base):
 
     __table_args__ = (
         Index("uq_devices_user_uuid", "user_id", "device_uuid", unique=True),
-        Index(
-            "ux_devices_one_active_per_user",
-            "user_id",
-            unique=True,
-            postgresql_where=text("is_active = TRUE AND revoked_at IS NULL"),
-        ),
     )

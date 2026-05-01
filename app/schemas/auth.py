@@ -22,6 +22,9 @@ class LoginRequest(BaseModel):
     nickname: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     device_uuid: str | None = Field(default=None, min_length=1, max_length=128)
+    device_name: str | None = Field(default=None, min_length=1, max_length=255)
+    platform: str | None = Field(default=None, min_length=1, max_length=32)
+    app_version: str | None = Field(default=None, min_length=1, max_length=64)
     totp_code: str | None = Field(default=None, min_length=6, max_length=8)
 
 
@@ -29,6 +32,8 @@ class LoginResponseData(BaseModel):
     requires_email_code: bool
     requires_totp: bool = False
     requires_bootstrap: bool = False
+    requires_device_approval: bool = False
+    device_approval_request_id: str | None = None
     login_challenge_id: str | None = None
     email_masked: str | None = None
     debug_code: str | None = None
@@ -43,10 +48,15 @@ class VerifyEmailCodeRequest(BaseModel):
     login_challenge_id: str
     code: str = Field(min_length=6, max_length=6)
     device_uuid: str | None = Field(default=None, min_length=1, max_length=128)
+    device_name: str | None = Field(default=None, min_length=1, max_length=255)
+    platform: str | None = Field(default=None, min_length=1, max_length=32)
+    app_version: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class VerifyEmailCodeResponseData(BaseModel):
     requires_bootstrap: bool = False
+    requires_device_approval: bool = False
+    device_approval_request_id: str | None = None
     bootstrap_token: str | None = None
     bootstrap_expires_in: int | None = None
     access_token: str | None = None

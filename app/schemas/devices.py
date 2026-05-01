@@ -63,3 +63,48 @@ class RevokeCurrentDeviceResponseData(BaseModel):
     revoked: bool
     revoked_sessions: int
     revoked_at: datetime
+
+
+class DeviceListItemSchema(BaseModel):
+    device_id: int
+    device_uuid: str
+    device_name: str
+    platform: str
+    app_version: str
+    is_current: bool = False
+    fcm_token_present: bool = False
+    registered_at: datetime
+    last_seen_at: datetime | None = None
+
+
+class ListDevicesResponseData(BaseModel):
+    items: list[DeviceListItemSchema]
+
+
+class RevokeDeviceResponseData(BaseModel):
+    device_id: int
+    revoked: bool
+    revoked_sessions: int
+    revoked_at: datetime
+
+
+class DeviceAuthorizationRequestSchema(BaseModel):
+    request_id: str
+    device_uuid: str
+    device_name: str | None = None
+    platform: str | None = None
+    app_version: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    requested_at: datetime
+    expires_at: datetime
+
+
+class ListDeviceAuthorizationRequestsResponseData(BaseModel):
+    items: list[DeviceAuthorizationRequestSchema]
+
+
+class ResolveDeviceAuthorizationRequestResponseData(BaseModel):
+    request_id: str
+    status: str
+    bootstrap_available: bool = False

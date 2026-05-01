@@ -45,7 +45,7 @@ async def test_bootstrap_device_creates_new_device(session: AsyncSession) -> Non
     assert devices[0].fcm_token == "fcm-1"
 
 
-async def test_bootstrap_device_deactivates_previous_device(
+async def test_bootstrap_device_keeps_previous_device_active(
     session: AsyncSession,
 ) -> None:
     user = await create_user(session, nickname="@u1")
@@ -82,11 +82,14 @@ async def test_bootstrap_device_deactivates_previous_device(
 
     old_device_check = await session.get(Device, old_device.id)
     assert old_device_check is not None
-    assert old_device_check.is_active is False
+    assert old_device_check.is_active is True
 
     query = await session.execute(
         select(Device).where(Device.user_id == user.id, Device.is_active.is_(True))
     )
     active_devices = list(query.scalars().all())
-    assert len(active_devices) == 1
-    assert active_devices[0].device_uuid == "new-device"
+    assert len(active_devices) == 2
+    assert {device.device_uuid for device in active_devices} == {
+        "old-device",
+        "new-device",
+    }

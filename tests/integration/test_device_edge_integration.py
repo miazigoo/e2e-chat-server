@@ -11,7 +11,7 @@ from app.services.device_service import bootstrap_device
 from tests.integration.helpers import create_device, create_user
 
 
-async def test_bootstrap_rejects_non_android(session: AsyncSession) -> None:
+async def test_bootstrap_rejects_unsupported_platform(session: AsyncSession) -> None:
     user = await create_user(session, nickname="@u1")
     await session.commit()
 
@@ -38,7 +38,7 @@ async def test_bootstrap_rejects_non_android(session: AsyncSession) -> None:
 
     assert exc.value.status_code == 400
     assert exc.value.code == "UNSUPPORTED_PLATFORM"
-    assert exc.value.message == "Only android platform is supported"
+    assert exc.value.message == "Only android and desktop platforms are supported"
 
 
 async def test_bootstrap_existing_device_updates_it(session: AsyncSession) -> None:

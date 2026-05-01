@@ -5,7 +5,11 @@ from sqlalchemy import delete, select
 
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
-from app.core.push import build_new_message_push_payload, send_push_data_message
+from app.core.push import (
+    build_device_approval_push_payload,
+    build_new_message_push_payload,
+    send_push_data_message,
+)
 from app.core.realtime import realtime_hub
 from app.core.storage import delete_object_if_exists, move_object
 from app.core.unread_cache import unread_cache
@@ -175,31 +179,37 @@ async def _send_new_message_push_impl(
     message_id: int,
 ) -> dict[str, str | bool | int]:
     async with AsyncSessionLocal() as session:
-        device = await devices_repo.get_active_by_user_id(
+        devices = await devices_repo.list_active_by_user_id(
             session,
             user_id=user_id,
         )
-        if device is None or not device.fcm_token:
+        devices = [device for device in devices if device.fcm_token]
+        if not devices:
             return {
                 "sent": False,
                 "user_id": user_id,
                 "reason": "device_not_ready",
             }
 
-        push_id = send_push_data_message(
-            token=device.fcm_token,
-            data=build_new_message_push_payload(
-                conversation_id=conversation_id,
-                message_id=message_id,
-            ),
-        )
+        sent = 0
+        for device in devices:
+            push_id = send_push_data_message(
+                token=device.fcm_token or "",
+                data=build_new_message_push_payload(
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                ),
+            )
+            if push_id is not None:
+                sent += 1
 
         return {
-            "sent": push_id is not None,
+            "sent": sent > 0,
             "user_id": user_id,
             "conversation_id": conversation_id,
             "message_id": message_id,
-            "push_id": push_id or "",
+            "devices_targeted": len(devices),
+            "devices_sent": sent,
         }
 
 
@@ -212,6 +222,50 @@ def send_new_message_push_task(
     return asyncio.run(
         _send_new_message_push_impl(user_id, conversation_id, message_id)
     )
+
+
+async def _send_device_approval_push_impl(
+    user_id: int,
+    request_id: str,
+) -> dict[str, str | bool | int]:
+    async with AsyncSessionLocal() as session:
+        devices = await devices_repo.list_active_by_user_id(
+            session,
+            user_id=user_id,
+        )
+        devices = [device for device in devices if device.fcm_token]
+        if not devices:
+            return {
+                "sent": False,
+                "user_id": user_id,
+                "request_id": request_id,
+                "reason": "device_not_ready",
+            }
+
+        sent = 0
+        for device in devices:
+            push_id = send_push_data_message(
+                token=device.fcm_token or "",
+                data=build_device_approval_push_payload(request_id=request_id),
+            )
+            if push_id is not None:
+                sent += 1
+
+        return {
+            "sent": sent > 0,
+            "user_id": user_id,
+            "request_id": request_id,
+            "devices_targeted": len(devices),
+            "devices_sent": sent,
+        }
+
+
+@celery_app.task(name="app.worker.tasks.send_device_approval_push_task")
+def send_device_approval_push_task(
+    user_id: int,
+    request_id: str,
+) -> dict[str, str | bool | int]:
+    return asyncio.run(_send_device_approval_push_impl(user_id, request_id))
 
 
 async def _recompute_unread_counters_for_user_impl(user_id: int) -> dict[str, int]:
