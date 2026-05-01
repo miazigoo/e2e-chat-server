@@ -169,6 +169,7 @@ class MessagePreviewSchema(BaseModel):
     message_id: int
     message_uuid: str
     sender_user_id: int
+    sender_device_id: int
     message_type: MessageType
     ciphertext: str
     ciphertext_version: int | None = None
@@ -185,6 +186,7 @@ class MessageListItemSchema(BaseModel):
     message_id: int
     message_uuid: str
     sender_user_id: int
+    sender_device_id: int
     recipient_user_id: int
     message_type: MessageType
     ciphertext: str

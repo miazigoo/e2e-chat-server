@@ -457,6 +457,7 @@ async def test_pin_message_serializes_preview_to_plain_json(
         conversation_id=conversation.id,
         message_uuid=str(uuid4()),
         sender_user_id=1,
+        sender_device_id=current_device.id,
         message_type=MessageType.FILE,
         ciphertext="ciphertext:file-smoke",
         has_attachments=True,

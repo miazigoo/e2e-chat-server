@@ -355,6 +355,7 @@ def _preview_from_message(message: Any) -> MessagePreviewSchema:
         message_id=message.id,
         message_uuid=message.message_uuid,
         sender_user_id=message.sender_user_id,
+        sender_device_id=message.sender_device_id,
         message_type=message.message_type,
         ciphertext=device_payload.ciphertext if device_payload else message.ciphertext,
         ciphertext_version=(
@@ -438,6 +439,7 @@ async def _build_message_items(
             message_id=message.id,
             message_uuid=message.message_uuid,
             sender_user_id=message.sender_user_id,
+            sender_device_id=message.sender_device_id,
             recipient_user_id=message.recipient_user_id,
             message_type=message.message_type,
             ciphertext=(
