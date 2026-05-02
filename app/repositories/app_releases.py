@@ -35,6 +35,8 @@ class AppReleasesRepository:
         file_size: int,
         sha256: str,
         changelog: str | None,
+        force_update: bool,
+        min_supported_version_code: int | None,
     ) -> AppRelease:
         release = AppRelease(
             platform=platform,
@@ -47,6 +49,8 @@ class AppReleasesRepository:
             file_size=file_size,
             sha256=sha256,
             changelog=changelog,
+            force_update=force_update,
+            min_supported_version_code=min_supported_version_code,
             is_active=True,
         )
         session.add(release)

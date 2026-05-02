@@ -15,6 +15,8 @@ Optional:
   APK_VERSION_NAME      Override version name
   APK_VERSION_CODE      Override version code
   APK_CHANGELOG         Release notes
+  APK_FORCE_UPDATE      Set to 1/true to require updating before app usage
+  APK_MIN_SUPPORTED_VERSION_CODE  Oldest supported client version_code
   APK_UPLOAD_INSECURE   Set to 1 for self-signed HTTPS certificates
 
 Example:
@@ -40,6 +42,8 @@ metadata_path="${APK_METADATA_PATH:-}"
 version_name="${APK_VERSION_NAME:-}"
 version_code="${APK_VERSION_CODE:-}"
 changelog="${APK_CHANGELOG:-}"
+force_update="${APK_FORCE_UPDATE:-0}"
+min_supported_version_code="${APK_MIN_SUPPORTED_VERSION_CODE:-}"
 insecure="${APK_UPLOAD_INSECURE:-0}"
 
 if [[ -z "$base_url" || -z "$token" || -z "$apk_path" ]]; then
@@ -86,16 +90,23 @@ fi
 
 endpoint="${base_url%/}/api/v1/files/apk/upload"
 curl_args=(--fail-with-body --show-error --silent)
+form_args=(
+  --form "version_name=$version_name"
+  --form "version_code=$version_code"
+  --form "changelog=$changelog"
+  --form "force_update=$force_update"
+  --form "file=@${apk_path};type=application/vnd.android.package-archive"
+)
 if [[ "$insecure" == "1" || "$insecure" == "true" ]]; then
   curl_args+=(--insecure)
+fi
+if [[ -n "$min_supported_version_code" ]]; then
+  form_args+=(--form "min_supported_version_code=$min_supported_version_code")
 fi
 
 curl "${curl_args[@]}" \
   --request POST "$endpoint" \
   --header "X-APK-Upload-Token: $token" \
-  --form "version_name=$version_name" \
-  --form "version_code=$version_code" \
-  --form "changelog=$changelog" \
-  --form "file=@${apk_path};type=application/vnd.android.package-archive"
+  "${form_args[@]}"
 
 echo

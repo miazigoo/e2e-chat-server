@@ -87,6 +87,8 @@ def build_app_update_push_payload(
     sha256: str,
     uploaded_at: str,
     changelog: str | None,
+    force_update: bool,
+    min_supported_version_code: int | None,
 ) -> dict[str, str]:
     return {
         "type": "app_update_available",
@@ -98,4 +100,8 @@ def build_app_update_push_payload(
         "sha256": sha256,
         "uploaded_at": uploaded_at,
         "changelog": changelog or "",
+        "force_update": "true" if force_update else "false",
+        "min_supported_version_code": (
+            str(min_supported_version_code) if min_supported_version_code else ""
+        ),
     }

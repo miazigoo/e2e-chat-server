@@ -651,6 +651,8 @@ Multipart fields:
 - `version_name`
 - `version_code`
 - `changelog` (optional)
+- `force_update` (`true/false`, optional)
+- `min_supported_version_code` (optional; versions below this build are blocked)
 - `file` (`.apk`)
 
 Example:
@@ -660,6 +662,8 @@ curl -X POST http://localhost:8000/api/v1/files/apk/upload \
   -F "version_name=1.2.3" \
   -F "version_code=123" \
   -F "changelog=Bug fixes and performance improvements" \
+  -F "force_update=true" \
+  -F "min_supported_version_code=123" \
   -F "file=@app-release.apk;type=application/vnd.android.package-archive"
 ```
 
@@ -692,6 +696,7 @@ Example response:
     "current_version_code": 120,
     "latest_version_code": 123,
     "update_available": true,
+    "update_required": true,
     "release": {
       "platform": "android",
       "version_name": "1.2.3",
@@ -700,6 +705,8 @@ Example response:
       "file_size": 73400320,
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "changelog": "Bug fixes and performance improvements",
+      "force_update": true,
+      "min_supported_version_code": 123,
       "content_type": "application/vnd.android.package-archive",
       "uploaded_at": "2026-04-25T12:00:00+00:00",
       "download_url": "https://minio-presigned-get-url",

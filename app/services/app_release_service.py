@@ -49,9 +49,46 @@ def _build_release_details(release: AppRelease) -> AppReleaseDetailsSchema:
         file_size=release.file_size,
         sha256=release.sha256,
         changelog=release.changelog,
+        force_update=release.force_update,
+        min_supported_version_code=release.min_supported_version_code,
         content_type=release.content_type,
         uploaded_at=release.created_at,
     )
+
+
+def _resolve_force_update_metadata(
+    *,
+    force_update: bool,
+    min_supported_version_code: int | None,
+    version_code: int,
+) -> tuple[bool, int | None]:
+    resolved_min_supported = min_supported_version_code
+    if force_update and resolved_min_supported is None:
+        resolved_min_supported = version_code
+
+    if resolved_min_supported is not None:
+        if resolved_min_supported < 1:
+            raise BadRequestError(
+                code="INVALID_MIN_SUPPORTED_VERSION_CODE",
+                message="min_supported_version_code must be >= 1",
+            )
+        if resolved_min_supported > version_code:
+            raise BadRequestError(
+                code="INVALID_MIN_SUPPORTED_VERSION_CODE",
+                message="min_supported_version_code cannot exceed version_code",
+            )
+
+    return force_update, resolved_min_supported
+
+
+def _is_update_required(
+    *,
+    current_version_code: int,
+    release: AppRelease,
+) -> bool:
+    if release.min_supported_version_code is not None:
+        return current_version_code < release.min_supported_version_code
+    return release.force_update and current_version_code < release.version_code
 
 
 async def _get_latest_release_or_404(session: AsyncSession) -> AppRelease:
@@ -74,6 +111,8 @@ async def upload_android_apk_release(
     version_name: str,
     version_code: int,
     changelog: str | None,
+    force_update: bool,
+    min_supported_version_code: int | None,
     file: UploadFile,
 ) -> ApkUploadResponseData:
     _validate_apk_upload_token(upload_token)
@@ -104,6 +143,11 @@ async def upload_android_apk_release(
 
     sha256 = hashlib.sha256(data).hexdigest()
     storage_key = f"releases/android/{version_code}/{uuid4().hex}.apk"
+    force_update, min_supported_version_code = _resolve_force_update_metadata(
+        force_update=force_update,
+        min_supported_version_code=min_supported_version_code,
+        version_code=version_code,
+    )
 
     await upload_bytes(
         bucket_name=settings.minio_bucket_assets,
@@ -128,6 +172,8 @@ async def upload_android_apk_release(
         file_size=len(data),
         sha256=sha256,
         changelog=(changelog.strip() if changelog and changelog.strip() else None),
+        force_update=force_update,
+        min_supported_version_code=min_supported_version_code,
     )
 
     devices = await devices_repo.list_active_with_fcm(session)
@@ -149,6 +195,8 @@ async def upload_android_apk_release(
         sha256=release.sha256,
         uploaded_at=release.created_at.isoformat(),
         changelog=release.changelog,
+        force_update=release.force_update,
+        min_supported_version_code=release.min_supported_version_code,
     )
 
     for device in devices:
@@ -195,5 +243,9 @@ async def check_android_apk_update(
         current_version_code=current_version_code,
         latest_version_code=release.version_code,
         update_available=current_version_code < release.version_code,
+        update_required=_is_update_required(
+            current_version_code=current_version_code,
+            release=release,
+        ),
         release=latest_release,
     )

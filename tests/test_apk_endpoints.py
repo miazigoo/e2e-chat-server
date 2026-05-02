@@ -14,6 +14,8 @@ def _latest_payload() -> dict[str, Any]:
         "file_size": 1024,
         "sha256": "a" * 64,
         "changelog": "Bug fixes",
+        "force_update": False,
+        "min_supported_version_code": None,
         "content_type": "application/vnd.android.package-archive",
         "uploaded_at": datetime.now(timezone.utc),
         "download_url": "https://example.com/chat.apk",
@@ -32,12 +34,16 @@ def test_upload_apk_endpoint_accepts_form_token(
         version_name: str,
         version_code: int,
         changelog: str | None,
+        force_update: bool,
+        min_supported_version_code: int | None,
         file: Any,
     ) -> dict[str, Any]:
         assert upload_token == "secret-token"
         assert version_name == "1.2.3"
         assert version_code == 123
         assert changelog == "Bug fixes"
+        assert force_update is True
+        assert min_supported_version_code is None
         assert file.filename == "chat.apk"
         data = _latest_payload()
         return {
@@ -47,6 +53,8 @@ def test_upload_apk_endpoint_accepts_form_token(
             "file_name": data["file_name"],
             "file_size": data["file_size"],
             "sha256": data["sha256"],
+            "force_update": True,
+            "min_supported_version_code": 123,
             "uploaded_at": data["uploaded_at"],
             "notified_devices": 7,
         }
@@ -63,6 +71,7 @@ def test_upload_apk_endpoint_accepts_form_token(
             "version_name": "1.2.3",
             "version_code": "123",
             "changelog": "Bug fixes",
+            "force_update": "true",
         },
         files={
             "file": (
@@ -90,9 +99,13 @@ def test_upload_apk_endpoint_accepts_header_token(
         version_name: str,
         version_code: int,
         changelog: str | None,
+        force_update: bool,
+        min_supported_version_code: int | None,
         file: Any,
     ) -> dict[str, Any]:
         assert upload_token == "header-secret"
+        assert force_update is False
+        assert min_supported_version_code is None
         data = _latest_payload()
         return {
             "platform": data["platform"],
@@ -101,6 +114,8 @@ def test_upload_apk_endpoint_accepts_header_token(
             "file_name": file.filename,
             "file_size": 1024,
             "sha256": "b" * 64,
+            "force_update": False,
+            "min_supported_version_code": None,
             "uploaded_at": data["uploaded_at"],
             "notified_devices": 1,
         }
@@ -162,6 +177,7 @@ def test_check_apk_version_endpoint(
             "current_version_code": 120,
             "latest_version_code": 123,
             "update_available": True,
+            "update_required": True,
             "release": latest,
         }
 
@@ -175,5 +191,6 @@ def test_check_apk_version_endpoint(
     assert response.status_code == 200
     body = response.json()
     assert body["data"]["update_available"] is True
+    assert body["data"]["update_required"] is True
     assert body["data"]["latest_version_code"] == 123
     assert body["data"]["release"]["version_name"] == "1.2.3"

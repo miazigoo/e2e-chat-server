@@ -260,6 +260,8 @@ async def upload_apk_endpoint(
     version_name: str = Form(...),
     version_code: int = Form(...),
     changelog: str | None = Form(default=None),
+    force_update: bool = Form(default=False),
+    min_supported_version_code: int | None = Form(default=None),
     token: str | None = Form(default=None),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db),
@@ -271,6 +273,8 @@ async def upload_apk_endpoint(
         version_name=version_name,
         version_code=version_code,
         changelog=changelog,
+        force_update=force_update,
+        min_supported_version_code=min_supported_version_code,
         file=file,
     )
     return ApiResponse(data=data)

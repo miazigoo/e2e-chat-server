@@ -20,6 +20,15 @@ class AppRelease(Base):
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    force_update: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("FALSE"),
+    )
+    min_supported_version_code: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

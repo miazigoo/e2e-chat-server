@@ -16,6 +16,17 @@ class AppReleaseDetailsSchema(BaseModel):
         default=None,
         description="Optional release notes for the published version.",
     )
+    force_update: bool = Field(
+        default=False,
+        description="Whether older client builds must update before continuing.",
+    )
+    min_supported_version_code: int | None = Field(
+        default=None,
+        description=(
+            "Oldest client version_code still supported by the server. "
+            "Clients below this build must update."
+        ),
+    )
     content_type: str | None = Field(
         default=None,
         description="Stored APK content type.",
@@ -42,6 +53,10 @@ class AppVersionCheckResponseData(BaseModel):
     latest_version_code: int = Field(description="Latest available build number.")
     update_available: bool = Field(
         description="Whether the client should prompt the user to update."
+    )
+    update_required: bool = Field(
+        default=False,
+        description="Whether the client must block usage until updated.",
     )
     release: LatestAppReleaseResponseData = Field(
         description="Metadata for the latest available Android APK."
