@@ -164,3 +164,33 @@ class MediaTagsRepository:
         for attachment_id, tag in result.all():
             tags_by_attachment_id.setdefault(int(attachment_id), []).append(tag)
         return tags_by_attachment_id
+
+    async def set_tags_for_attachment(
+        self,
+        session: AsyncSession,
+        *,
+        attachment_id: int,
+        tag_ids: list[int],
+        tagged_by_user_id: int,
+    ) -> None:
+        normalized_tag_ids = list(dict.fromkeys(tag_ids))
+        if normalized_tag_ids:
+            await session.execute(
+                delete(AttachmentMediaTag).where(
+                    AttachmentMediaTag.attachment_id == attachment_id,
+                    AttachmentMediaTag.tag_id.not_in(normalized_tag_ids),
+                )
+            )
+        else:
+            await session.execute(
+                delete(AttachmentMediaTag).where(
+                    AttachmentMediaTag.attachment_id == attachment_id,
+                )
+            )
+
+        await self.add_tags_to_attachments(
+            session,
+            attachment_ids=[attachment_id],
+            tag_ids=normalized_tag_ids,
+            tagged_by_user_id=tagged_by_user_id,
+        )

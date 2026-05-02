@@ -332,3 +332,126 @@ async def test_send_file_message_assigns_media_tags_and_filters_shared(
         limit=20,
     )
     assert [item.message_id for item in shared.items] == [sent["message_id"]]
+
+
+async def test_replace_attachment_tags_updates_shared_filtering(
+    session: AsyncSession,
+) -> None:
+    from app.schemas.media_tags import CreateMediaTagRequest, SetAttachmentTagsRequest
+    from app.services.attachment_service import list_attachments_for_messages
+    from app.services.media_tag_service import create_media_tag, set_tags_for_attachment
+
+    sender = await create_user(session, nickname="@sender-retag")
+    recipient = await create_user(session, nickname="@recipient-retag")
+    sender_device = await create_device(
+        session, user_id=sender.id, device_uuid="sender-retag-device"
+    )
+    await create_device(
+        session, user_id=recipient.id, device_uuid="recipient-retag-device"
+    )
+    conversation = await create_conversation(
+        session,
+        user_a_id=sender.id,
+        user_b_id=recipient.id,
+        created_by_user_id=sender.id,
+        message_ttl_days=30,
+    )
+    upload_session = UploadSession(
+        user_id=sender.id,
+        conversation_id=conversation.id,
+        status=UploadSessionStatus.COMPLETED,
+        files_expected_count=1,
+        files_uploaded_count=1,
+        expires_at=now_utc() + timedelta(hours=1),
+        completed_at=now_utc(),
+    )
+    session.add(upload_session)
+    await session.flush()
+    attachment = Attachment(
+        upload_session_id=upload_session.id,
+        storage_key="attachments/retagged-check",
+        bucket_name="attachments",
+        encrypted_file_name="retag.enc",
+        encrypted_metadata={"kind": "retag"},
+        file_size=321,
+        mime_hint="image/png",
+        sha256_encrypted_blob="c" * 64,
+        upload_status=AttachmentStatus.UPLOADED,
+        expires_at=now_utc() + timedelta(days=1),
+    )
+    session.add(attachment)
+    await session.commit()
+
+    checks = await create_media_tag(
+        session,
+        current_user=sender,
+        conversation_id=conversation.id,
+        payload=CreateMediaTagRequest(name="Чеки", color="#00AA55"),
+    )
+    photos = await create_media_tag(
+        session,
+        current_user=sender,
+        conversation_id=conversation.id,
+        payload=CreateMediaTagRequest(name="Фото", color="#3366FF"),
+    )
+
+    sent = await send_message(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        payload=SendMessageRequest(
+            conversation_id=conversation.id,
+            recipient_user_id=recipient.id,
+            message_uuid=str(uuid4()),
+            message_type="file",
+            ciphertext="file-cipher",
+            ciphertext_version=1,
+            encryption_mode="signal",
+            nonce="file-nonce",
+            client_created_at=now_utc(),
+            expires_at=now_utc() + timedelta(days=1),
+            attachment_ids=[attachment.id],
+            attachment_tag_ids=[checks.tag_id],
+        ),
+    )
+
+    updated = await set_tags_for_attachment(
+        session,
+        current_user=sender,
+        attachment_id=attachment.id,
+        payload=SetAttachmentTagsRequest(tag_ids=[photos.tag_id]),
+    )
+    assert [item.tag_id for item in updated.items] == [photos.tag_id]
+
+    shared_checks = await list_shared_messages(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        conversation_id=conversation.id,
+        tab="media",
+        before_message_id=None,
+        tag_id=checks.tag_id,
+        limit=20,
+    )
+    assert shared_checks.items == []
+
+    shared_photos = await list_shared_messages(
+        session,
+        current_user=sender,
+        current_device=sender_device,
+        conversation_id=conversation.id,
+        tab="media",
+        before_message_id=None,
+        tag_id=photos.tag_id,
+        limit=20,
+    )
+    assert [item.message_id for item in shared_photos.items] == [sent["message_id"]]
+
+    batch = await list_attachments_for_messages(
+        session,
+        current_user=sender,
+        message_ids=[sent["message_id"]],
+    )
+    assert len(batch.items) == 1
+    assert len(batch.items[0].items) == 1
+    assert [tag.tag_id for tag in batch.items[0].items[0].media_tags] == [photos.tag_id]

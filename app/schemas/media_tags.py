@@ -56,6 +56,17 @@ class AssignAttachmentTagsRequest(BaseModel):
         return value
 
 
+class SetAttachmentTagsRequest(BaseModel):
+    tag_ids: list[int] = Field(default_factory=list, max_length=20)
+
+    @field_validator("tag_ids")
+    @classmethod
+    def validate_tag_ids_unique(cls, value: list[int]) -> list[int]:
+        if len(value) != len(set(value)):
+            raise ValueError("tag_ids must be unique")
+        return value
+
+
 class AttachmentTagsResponseData(BaseModel):
     attachment_id: int
     items: list[MediaTagSchema] = Field(default_factory=list)

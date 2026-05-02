@@ -198,6 +198,33 @@ class FilesRepository:
         )
         return list(result.scalars().all())
 
+    async def list_message_attachments_for_user_batch(
+        self,
+        session: AsyncSession,
+        *,
+        message_ids: list[int],
+        user_id: int,
+    ) -> list[Attachment]:
+        if not message_ids:
+            return []
+
+        from app.models.message import Message
+
+        result = await session.execute(
+            select(Attachment)
+            .join(Message, Message.id == Attachment.message_id)
+            .where(
+                Attachment.message_id.in_(message_ids),
+                Message.is_deleted_global.is_(False),
+                (
+                    (Message.sender_user_id == user_id)
+                    | (Message.recipient_user_id == user_id)
+                ),
+            )
+            .order_by(Attachment.message_id.asc(), Attachment.id.asc())
+        )
+        return list(result.scalars().all())
+
     async def get_attachment_for_user(
         self,
         session: AsyncSession,

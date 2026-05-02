@@ -81,9 +81,22 @@ class AttachmentMetadataItemSchema(BaseModel):
     media_tags: list[MediaTagSchema] = Field(default_factory=list)
 
 
+class BatchMessageAttachmentsRequest(BaseModel):
+    message_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class MessageAttachmentsGroupSchema(BaseModel):
+    message_id: int
+    items: list[AttachmentMetadataItemSchema] = Field(default_factory=list)
+
+
 class ListMessageAttachmentsResponseData(BaseModel):
     message_id: int
     items: list[AttachmentMetadataItemSchema] = Field(default_factory=list)
+
+
+class BatchMessageAttachmentsResponseData(BaseModel):
+    items: list[MessageAttachmentsGroupSchema] = Field(default_factory=list)
 
 
 class GetAttachmentResponseData(AttachmentMetadataItemSchema):

@@ -9,8 +9,10 @@ from app.repositories.files import FilesRepository
 from app.repositories.media_tags import MediaTagsRepository
 from app.schemas.files import (
     AttachmentMetadataItemSchema,
+    BatchMessageAttachmentsResponseData,
     GetAttachmentResponseData,
     ListMessageAttachmentsResponseData,
+    MessageAttachmentsGroupSchema,
 )
 from app.schemas.media_tags import MediaTagSchema
 
@@ -82,6 +84,58 @@ async def list_message_attachments(
             )
             for att in attachments
         ],
+    )
+
+
+async def list_attachments_for_messages(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    message_ids: list[int],
+) -> BatchMessageAttachmentsResponseData:
+    attachments = await files_repo.list_message_attachments_for_user_batch(
+        session,
+        message_ids=message_ids,
+        user_id=current_user.id,
+    )
+    tags_by_attachment_id = await media_tags_repo.list_tags_for_attachments(
+        session,
+        attachment_ids=[attachment.id for attachment in attachments],
+    )
+
+    attachments_by_message_id: dict[int, list[AttachmentMetadataItemSchema]] = {
+        message_id: [] for message_id in message_ids
+    }
+    for attachment in attachments:
+        message_id = attachment.message_id
+        if message_id is None:
+            continue
+        attachments_by_message_id.setdefault(message_id, []).append(
+            _attachment_to_schema(
+                attachment,
+                media_tags=[
+                    MediaTagSchema(
+                        tag_id=tag.id,
+                        conversation_id=tag.conversation_id,
+                        name=tag.name,
+                        color=tag.color,
+                        created_by_user_id=tag.created_by_user_id,
+                        created_at=tag.created_at,
+                        updated_at=tag.updated_at,
+                    )
+                    for tag in tags_by_attachment_id.get(attachment.id, [])
+                ],
+            )
+        )
+
+    return BatchMessageAttachmentsResponseData(
+        items=[
+            MessageAttachmentsGroupSchema(
+                message_id=message_id,
+                items=attachments_by_message_id.get(message_id, []),
+            )
+            for message_id in message_ids
+        ]
     )
 
 

@@ -11,6 +11,8 @@ from app.schemas.app_releases import (
 )
 from app.schemas.common import ApiResponse
 from app.schemas.files import (
+    BatchMessageAttachmentsRequest,
+    BatchMessageAttachmentsResponseData,
     CompleteUploadSessionRequest,
     CompleteUploadSessionResponseData,
     CreateUploadSessionRequest,
@@ -23,6 +25,7 @@ from app.schemas.files import (
 from app.schemas.media_tags import (
     AssignAttachmentTagsRequest,
     AttachmentTagsResponseData,
+    SetAttachmentTagsRequest,
 )
 from app.services.app_release_service import (
     check_android_apk_update,
@@ -31,6 +34,7 @@ from app.services.app_release_service import (
 )
 from app.services.attachment_service import (
     get_attachment_metadata,
+    list_attachments_for_messages,
     list_message_attachments,
 )
 from app.services.file_service import (
@@ -41,6 +45,7 @@ from app.services.file_service import (
 from app.services.media_tag_service import (
     assign_tags_to_attachments,
     remove_tag_from_attachment,
+    set_tags_for_attachment,
 )
 
 router = APIRouter()
@@ -142,6 +147,24 @@ async def list_message_attachments_endpoint(
     return ApiResponse(data=data)
 
 
+@router.post(
+    "/messages/attachments/batch",
+    response_model=ApiResponse[BatchMessageAttachmentsResponseData],
+    summary="List attachment metadata for multiple messages",
+)
+async def list_message_attachments_batch_endpoint(
+    payload: BatchMessageAttachmentsRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[BatchMessageAttachmentsResponseData]:
+    data = await list_attachments_for_messages(
+        session,
+        current_user=current_user,
+        message_ids=payload.message_ids,
+    )
+    return ApiResponse(data=data)
+
+
 @router.get(
     "/attachments/{attachment_id}",
     response_model=ApiResponse[GetAttachmentResponseData],
@@ -174,6 +197,26 @@ async def assign_attachment_media_tags_endpoint(
     session: AsyncSession = Depends(get_db),
 ) -> ApiResponse[AttachmentTagsResponseData]:
     data = await assign_tags_to_attachments(
+        session,
+        current_user=current_user,
+        attachment_id=attachment_id,
+        payload=payload,
+    )
+    return ApiResponse(data=data)
+
+
+@router.put(
+    "/attachments/{attachment_id}/media-tags",
+    response_model=ApiResponse[AttachmentTagsResponseData],
+    summary="Replace media tags on attachment",
+)
+async def set_attachment_media_tags_endpoint(
+    attachment_id: int,
+    payload: SetAttachmentTagsRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> ApiResponse[AttachmentTagsResponseData]:
+    data = await set_tags_for_attachment(
         session,
         current_user=current_user,
         attachment_id=attachment_id,

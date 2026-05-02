@@ -15,6 +15,7 @@ from app.schemas.media_tags import (
     CreateMediaTagRequest,
     ListMediaTagsResponseData,
     MediaTagSchema,
+    SetAttachmentTagsRequest,
     UpdateMediaTagRequest,
 )
 
@@ -272,6 +273,55 @@ async def remove_tag_from_attachment(
         session,
         attachment_id=attachment_id,
         tag_id=tag_id,
+    )
+    await session.commit()
+
+    tags_by_attachment_id = await media_tags_repo.list_tags_for_attachments(
+        session,
+        attachment_ids=[attachment_id],
+    )
+    return AttachmentTagsResponseData(
+        attachment_id=attachment_id,
+        items=[
+            _tag_schema(tag) for tag in tags_by_attachment_id.get(attachment_id, [])
+        ],
+    )
+
+
+async def set_tags_for_attachment(
+    session: AsyncSession,
+    *,
+    current_user: User,
+    attachment_id: int,
+    payload: SetAttachmentTagsRequest,
+) -> AttachmentTagsResponseData:
+    attachment = await files_repo.get_attachment_for_user(
+        session,
+        attachment_id=attachment_id,
+        user_id=current_user.id,
+    )
+    if attachment is None or attachment.message_id is None:
+        raise NotFoundError(code="ATTACHMENT_NOT_FOUND", message="Attachment not found")
+
+    from app.repositories.messages import MessagesRepository
+
+    message = await MessagesRepository().get_by_id(
+        session,
+        message_id=attachment.message_id,
+    )
+    if message is None:
+        raise NotFoundError(code="ATTACHMENT_NOT_FOUND", message="Attachment not found")
+
+    await validate_tags_for_conversation(
+        session,
+        conversation_id=message.conversation_id,
+        tag_ids=payload.tag_ids,
+    )
+    await media_tags_repo.set_tags_for_attachment(
+        session,
+        attachment_id=attachment_id,
+        tag_ids=payload.tag_ids,
+        tagged_by_user_id=current_user.id,
     )
     await session.commit()
 
