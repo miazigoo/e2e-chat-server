@@ -15,6 +15,7 @@ Optional:
   APK_VERSION_NAME      Override version name
   APK_VERSION_CODE      Override version code
   APK_CHANGELOG         Release notes
+  APK_UPLOAD_INSECURE   Set to 1 for self-signed HTTPS certificates
 
 Example:
   APK_UPLOAD_BASE_URL="https://example.com" \
@@ -22,6 +23,7 @@ Example:
   APK_PATH="../-e2e-chat-client/app/build/outputs/apk/release/app-release.apk" \
   APK_METADATA_PATH="../-e2e-chat-client/app/build/outputs/apk/release/output-metadata.json" \
   APK_CHANGELOG="Release build" \
+  APK_UPLOAD_INSECURE=1 \
   scripts/upload_apk_release.sh
 EOF
 }
@@ -38,6 +40,7 @@ metadata_path="${APK_METADATA_PATH:-}"
 version_name="${APK_VERSION_NAME:-}"
 version_code="${APK_VERSION_CODE:-}"
 changelog="${APK_CHANGELOG:-}"
+insecure="${APK_UPLOAD_INSECURE:-0}"
 
 if [[ -z "$base_url" || -z "$token" || -z "$apk_path" ]]; then
   usage >&2
@@ -82,8 +85,12 @@ if [[ -z "$version_name" || -z "$version_code" ]]; then
 fi
 
 endpoint="${base_url%/}/api/v1/files/apk/upload"
+curl_args=(--fail-with-body --show-error --silent)
+if [[ "$insecure" == "1" || "$insecure" == "true" ]]; then
+  curl_args+=(--insecure)
+fi
 
-curl --fail-with-body --show-error --silent \
+curl "${curl_args[@]}" \
   --request POST "$endpoint" \
   --header "X-APK-Upload-Token: $token" \
   --form "version_name=$version_name" \
