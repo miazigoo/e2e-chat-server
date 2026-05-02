@@ -536,6 +536,21 @@ curl -X POST http://localhost:8000/api/v1/files/apk/upload \
   -F "file=@app-release.apk;type=application/vnd.android.package-archive"
 ```
 
+Helper script:
+```bash
+APK_UPLOAD_BASE_URL="https://example.com" \
+APK_UPLOAD_TOKEN="<apk_upload_token>" \
+APK_PATH="../-e2e-chat-client/app/build/outputs/apk/release/app-release.apk" \
+APK_METADATA_PATH="../-e2e-chat-client/app/build/outputs/apk/release/output-metadata.json" \
+APK_CHANGELOG="Release build" \
+scripts/upload_apk_release.sh
+```
+
+Set `APK_UPLOAD_INSECURE=1` when uploading to a server that uses a self-signed
+HTTPS certificate. If `APK_METADATA_PATH` is present, the script reads
+`version_name` and `version_code` from Gradle `output-metadata.json`; otherwise
+set `APK_VERSION_NAME` and `APK_VERSION_CODE` explicitly.
+
 #### Get latest APK metadata
 `GET /api/v1/files/apk/latest`
 
