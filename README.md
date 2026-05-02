@@ -1,6 +1,6 @@
 # E2E Chat Server
 
-Production-oriented backend for secure 1:1 Android chat.
+Production-oriented backend for secure 1:1 Android and desktop chat.
 
 ## Stack
 
@@ -269,6 +269,40 @@ Authorization: Bearer <access_token>
 ```
 ---
 ## Device endpoints
+### List devices
+`GET /api/v1/devices`
+
+Returns the user's active approved devices. Use it for the account devices screen.
+
+### Device approval requests
+When login is attempted from an unknown device and the account already has an
+active device, auth returns:
+```json
+{
+  "ok": true,
+  "data": {
+    "requires_email_code": false,
+    "requires_totp": false,
+    "requires_bootstrap": false,
+    "requires_device_approval": true,
+    "device_approval_request_id": "uuid"
+  },
+  "meta": {}
+}
+```
+
+Already approved devices receive realtime event `device_approval_requested` and,
+when FCM is configured, a push notification.
+
+List pending requests:
+`GET /api/v1/devices/authorization-requests`
+
+Approve or deny a new device:
+- `POST /api/v1/devices/authorization-requests/{request_id}/approve`
+- `POST /api/v1/devices/authorization-requests/{request_id}/deny`
+
+After approval, the new device repeats login and receives a bootstrap token.
+
 ### Heartbeat
 `POST /api/v1/devices/heartbeat`
 Response:
@@ -297,10 +331,52 @@ Response:
 ### Revoke current device
 `DELETE /api/v1/devices/current`
 
+### Revoke another device
+`DELETE /api/v1/devices/{device_id}`
+
 ---
 ## Keys
+### Get recipient key bundles for all approved devices
+`GET /api/v1/keys/bundles/{user_id}`
+
+Returns key bundles for every active approved device of the target user. Use this
+for multi-device fan-out before sending a message.
+
+Response:
+```json
+{
+  "ok": true,
+  "data": {
+    "user_id": 2,
+    "devices": [
+      {
+        "user_id": 2,
+        "device_id": 20,
+        "requested_by_device_id": 10,
+        "registration_id": 2001,
+        "public_identity_key": "base64",
+        "public_signing_key": "base64",
+        "signed_prekey_id": 1,
+        "signed_prekey": "base64",
+        "signed_prekey_signature": "base64",
+        "one_time_prekey": {
+          "prekey_id": 123,
+          "public_prekey": "base64"
+        },
+        "prekeys_remaining": 49
+      }
+    ]
+  },
+  "meta": {}
+}
+```
+
 ### Get recipient key bundle
 `GET /api/v1/keys/bundle/{user_id}`
+
+Compatibility endpoint for one device. Prefer `/bundles/{user_id}` for current
+multi-device clients.
+
 Response:
 ```json
 {
@@ -309,8 +385,10 @@ Response:
     "user_id": 2,
     "device_id": 20,
     "requested_by_device_id": 10,
+    "registration_id": 2001,
     "public_identity_key": "base64",
     "public_signing_key": "base64",
+    "signed_prekey_id": 1,
     "signed_prekey": "base64",
     "signed_prekey_signature": "base64",
     "one_time_prekey": {
@@ -485,6 +563,14 @@ Client performs HTTP `PUT` directly to `upload_url`.
 #### List message attachments
 `GET /api/v1/files/messages/{message_id}/attachments`
 
+#### List attachments for multiple messages
+`POST /api/v1/files/messages/attachments/batch`
+```json
+{
+  "message_ids": [99, 100]
+}
+```
+
 ### Get attachment metadata and download URL
 `GET /api/v1/files/attachments/{attachment_id}`
 Response:
@@ -502,6 +588,17 @@ Response:
     "created_at": "2026-04-20T12:00:00+00:00",
     "expires_at": null,
     "deleted_at": null,
+    "media_tags": [
+      {
+        "tag_id": 7,
+        "conversation_id": 123,
+        "name": "Receipts",
+        "color": "#22c55e",
+        "created_by_user_id": 1,
+        "created_at": "2026-04-20T12:00:00+00:00",
+        "updated_at": "2026-04-20T12:00:00+00:00"
+      }
+    ],
     "can_download": true,
     "download_url": "https://minio-presigned-get-url",
     "download_url_expires_in": 300
@@ -509,6 +606,36 @@ Response:
   "meta": {}
 }
 
+```
+
+### Media tags
+Conversation media tags are server-visible labels for uploaded attachments. They
+are intended for folders/filters such as receipts, card barcodes or photos.
+
+Manage tags in a conversation:
+- `GET /api/v1/conversations/{conversation_id}/media-tags`
+- `POST /api/v1/conversations/{conversation_id}/media-tags`
+- `PATCH /api/v1/conversations/{conversation_id}/media-tags/{tag_id}`
+- `DELETE /api/v1/conversations/{conversation_id}/media-tags/{tag_id}`
+
+Create tag:
+```json
+{
+  "name": "Receipts",
+  "color": "#22c55e"
+}
+```
+
+Assign tags to an existing attachment:
+- `POST /api/v1/files/attachments/{attachment_id}/media-tags` adds tags
+- `PUT /api/v1/files/attachments/{attachment_id}/media-tags` replaces all tags
+- `DELETE /api/v1/files/attachments/{attachment_id}/media-tags/{tag_id}` removes one tag
+
+Request body:
+```json
+{
+  "tag_ids": [7, 8]
+}
 ```
 
 ### Android APK releases
@@ -631,7 +758,17 @@ Multipart field:
   "client_created_at": "2026-04-20T12:00:00+00:00",
   "expires_at": "2026-05-20T12:00:00+00:00",
   "auto_delete_after_read_seconds": null,
-  "attachment_ids": [10]
+  "attachment_ids": [10],
+  "attachment_tag_ids": [7],
+  "device_payloads": [
+    {
+      "device_id": 20,
+      "ciphertext": "base64ciphertext-for-device-20",
+      "ciphertext_version": 1,
+      "nonce": "base64nonce",
+      "aad_hash": null
+    }
+  ]
 }
 
 ```
@@ -645,6 +782,7 @@ Multipart field:
     "conversation_id": 123,
     "recipient_user_id": 2,
     "recipient_device_id": 20,
+    "recipient_device_ids": [20, 21],
     "server_received_at": "2026-04-20T12:00:01+00:00",
     "delivery_status": "server_received",
     "is_idempotent_replay": false
@@ -653,6 +791,11 @@ Multipart field:
 }
 
 ```
+
+For E2E multi-device delivery, the client should fetch `/api/v1/keys/bundles/{recipient_user_id}`,
+encrypt a per-device payload and send it in `device_payloads`. The server stores
+fan-out payloads for all approved active recipient devices and returns
+`recipient_device_ids`.
 
 ### Forward messages
 `POST /api/v1/messages/forward`
@@ -682,6 +825,8 @@ Allowed `tab` values:
 - `files`
 
 Response also includes counts for all tabs so the client can render Telegram-like tabs.
+For media tags, pass `tag_id`:
+`GET /api/v1/messages/conversations/{conversation_id}/shared?tab=media&tag_id=7&limit=50`
 
 ### Pin message
 `POST /api/v1/messages/conversations/{conversation_id}/pin/{message_id}`
@@ -692,11 +837,21 @@ Response also includes counts for all tabs so the client can render Telegram-lik
 ### List messages
 `GET /api/v1/messages/conversations/{conversation_id}?before_id=1000&limit=50`
 
+History supports cursor and anchor loading:
+- `before_id` for older messages
+- `after_id` for newer messages
+- `anchor_id` to load around a specific message, for example when opening a pinned message
+
 Each message item now may include:
+- `sender_device_id`
+- `device_payload`
 - `reply_to_message_id`
 - `forward_from_message_id`
 - `reply_preview`
 - `forward_preview`
+
+`sender_device_id` is also present in reply, forward and pinned previews so the
+client can deterministically pick the sender session for decryption.
 
 ### Delivered ack
 `POST /api/v1/messages/{message_id}/delivered`
